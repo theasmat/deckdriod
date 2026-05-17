@@ -23,7 +23,7 @@ impl Config {
             if let Ok(iter) = dotenvy::from_path_iter(".deckdriodconfig") {
                 for item in iter {
                     if let Ok((key, value)) = item {
-                        if key.starts_with("KDEV_CMD_") {
+                        if key.starts_with("DECKDRIOD_CMD_") {
                             if let Some(c) = key.chars().last().map(|c| c.to_ascii_lowercase()) {
                                 custom_commands.insert(c, value);
                             }

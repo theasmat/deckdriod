@@ -76,8 +76,8 @@ APP_ID=com.example.app.dev
 ACTIVITY=com.example.app/com.example.app.MainActivity
 WATCH_LATENCY=0.5
 
-# Custom hotkeys (KDEV_CMD_<key>=command)
-KDEV_CMD_T="adb shell am start -a android.intent.action.VIEW -d 'https://test.com'"
+# Custom hotkeys (DECKDRIOD_CMD_<key>=command)
+DECKDRIOD_CMD_T="adb shell am start -a android.intent.action.VIEW -d 'https://test.com'"
 ```
 
 ---

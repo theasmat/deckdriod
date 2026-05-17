@@ -1,24 +1,24 @@
-# Plan: Rewrite kdev as a Standalone Rust Binary
+# Plan: Rewrite deckdriod as a Standalone Rust Binary
 
 ## Objective
-Provide a highly detailed, step-by-step instruction set for an AI assistant to implement the `kdev` tool as a standalone Rust binary in a new, separate directory (`tools/kdev-rs`). This binary will replace the existing `scripts/kdev/kdev.sh` bash script, eliminating the `fswatch` system dependency by using native Rust crates for file watching and process management.
+Provide a highly detailed, step-by-step instruction set for an AI assistant to implement the `deckdriod` tool as a standalone Rust binary in a new, separate directory (`tools/deckdriod-rs`). This binary will replace the existing `scripts/deckdriod/deckdriod.sh` bash script, eliminating the `fswatch` system dependency by using native Rust crates for file watching and process management.
 
 ## AI Implementation Instructions
 
-You are tasked with building a standalone Rust CLI tool that replicates the functionality of the `kdev` bash script. 
-Target directory: `tools/kdev-rs`
+You are tasked with building a standalone Rust CLI tool that replicates the functionality of the `deckdriod` bash script. 
+Target directory: `tools/deckdriod-rs`
 
 ### Phase 1: Project Setup and Dependencies
-1.  **Initialize Project:** Create a new Rust project by running `cargo new tools/kdev-rs`.
+1.  **Initialize Project:** Create a new Rust project by running `cargo new tools/deckdriod-rs`.
 2.  **Add Dependencies:** Add the following crates to `Cargo.toml`:
     *   `tokio` (features: `full`) for async runtime and process management.
     *   `notify` and `notify-debouncer-mini` for cross-platform file watching.
     *   `crossterm` for terminal raw mode, keyboard input, and styling.
-    *   `dotenvy` for loading `.kdevconfig`.
+    *   `dotenvy` for loading `.deckdriodconfig`.
     *   `anyhow` for error handling.
 
 ### Phase 2: Configuration & State Management
-1.  **Config Loading:** Create a module to parse `.kdevconfig` from the project root.
+1.  **Config Loading:** Create a module to parse `.deckdriodconfig` from the project root.
     *   Load variables like `WATCH_LATENCY` (default: 1.0) and other constants (`APP_ID`, `ACTIVITY`).
 2.  **App State:** Define a central state struct (e.g., using `Arc<RwLock<State>>` or channel communication) to track:
     *   `auto_rebuild: bool`
@@ -60,7 +60,7 @@ Target directory: `tools/kdev-rs`
 4.  **Graceful Shutdown:** Ensure `disable_raw_mode()` is called, and all child processes (`gradlew`, `adb logcat`) are explicitly killed on exit.
 
 ### Phase 7: Integration
-1.  **Wrapper Script:** Once tested, modify `.direnv/bin/kdev` to execute the built Rust binary (e.g., `cd tools/kdev-rs && cargo run --release -- "$@"` or compile once and run the executable).
+1.  **Wrapper Script:** Once tested, modify `.direnv/bin/deckdriod` to execute the built Rust binary (e.g., `cd tools/deckdriod-rs && cargo run --release -- "$@"` or compile once and run the executable).
 
 ## Verification & Testing
 *   The AI must verify that `fswatch` is no longer required.
@@ -68,5 +68,5 @@ Target directory: `tools/kdev-rs`
 *   The AI must verify that `gradlew` runs without stealing terminal input focus.
 
 ## Migration & Rollback
-*   Retain the bash scripts in `scripts/kdev/` during development.
-*   The `.direnv/bin/kdev` script serves as the toggle switch between the old bash implementation and the new Rust implementation.
+*   Retain the bash scripts in `scripts/deckdriod/` during development.
+*   The `.direnv/bin/deckdriod` script serves as the toggle switch between the old bash implementation and the new Rust implementation.

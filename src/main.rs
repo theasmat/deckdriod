@@ -283,8 +283,8 @@ async fn main() -> Result<()> {
                                 (KeyCode::Char('5'), _) => app.state.min_log_level = LogLevel::Error,
                                 (KeyCode::Char('e'), _) => {
                                     let content: String = app.logs.iter().cloned().collect::<Vec<String>>().join("\n");
-                                    if let Ok(_) = std::fs::write("kdev_logs.txt", content) {
-                                        let _ = tx_log.send("[ok] logs exported to kdev_logs.txt".to_string());
+                                    if let Ok(_) = std::fs::write("deckdriod_logs.txt", content) {
+                                        let _ = tx_log.send("[ok] logs exported to deckdriod_logs.txt".to_string());
                                     }
                                 }
                                 (KeyCode::Char(c), _) => {
@@ -557,7 +557,7 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
             Line::from(vec![Span::styled(" 1-5       ", Style::default().fg(Color::Cyan)), Span::raw(": Set Min Log Level")]),
             Line::from(vec![Span::styled(" k / j     ", Style::default().fg(Color::Cyan)), Span::raw(": Scroll Up/Down")]),
             Line::from(vec![Span::styled(" G         ", Style::default().fg(Color::Cyan)), Span::raw(": Follow Bottom")]),
-            Line::from(vec![Span::styled(" e         ", Style::default().fg(Color::Cyan)), Span::raw(": Export Logs to kdev_logs.txt")]),
+            Line::from(vec![Span::styled(" e         ", Style::default().fg(Color::Cyan)), Span::raw(": Export Logs to deckdriod_logs.txt")]),
             Line::from(vec![Span::styled(" d         ", Style::default().fg(Color::Cyan)), Span::raw(": Android Dev Menu")]),
             Line::from(vec![Span::styled(" x         ", Style::default().fg(Color::Cyan)), Span::raw(": Clear App Data")]),
             Line::from(vec![Span::raw("")]),
