@@ -13,7 +13,9 @@
 - **⚡️ Smart Build Telemetry:** Tracks current Gradle tasks and keeps a history of build durations.
 - **🔍 Power Logcat:** Instant search, level filtering (Alt + 1-5), and manual scroll pause/resume.
 - **📑 Multi-Tab Management:** Categorize logs into Dashboard, App, Build, and Errors views.
-- **🚨 Crash Detection:** Automatically highlights fatal exceptions and keeps them visible until cleared.
+- **🚨 Advanced Crash Detection:** Automatically highlights fatal exceptions, captures the full stack trace, and saves it to `crash_report.txt`.
+- **📟 Smart Stack Traces:** Boilerplate lines are dimmed to make the root cause of an error stand out.
+- **✨ Expo-Style Structured Logging:** Intercepts `[DeckDriod]` log prefixes and pretty-prints JSON payloads for modern app-side debugging.
 - **🎥 Media Tools:** One-key screen recording and screenshots pulled directly to your workspace.
 - **🔗 Deep Link Tester:** Quickly test deep links without touching your phone.
 - **🛠 Layout Debugger:** Toggle system layout bounds with a single hotkey.
