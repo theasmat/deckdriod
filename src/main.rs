@@ -89,6 +89,31 @@ use commands::BuildEvent;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Argument parsing
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() > 1 {
+        match args[1].as_str() {
+            "-v" | "--version" => {
+                println!("deckdriod v{}", env!("CARGO_PKG_VERSION"));
+                return Ok(());
+            }
+            "update" => {
+                println!("Updating deckdriod...");
+                let status = std::process::Command::new("sh")
+                    .arg("-c")
+                    .arg("curl -sSf https://raw.githubusercontent.com/theasmat/deckdriod/main/install.sh | sh")
+                    .status()?;
+                if status.success() {
+                    println!("Update successful!");
+                } else {
+                    println!("Update failed.");
+                }
+                return Ok(());
+            }
+            _ => {}
+        }
+    }
+
     let config = Config::load();
     let mut state = AppState::default();
 
@@ -592,6 +617,10 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
         let area = centered_rect(60, 60, f.area());
         f.render_widget(Clear, area); // Clear the area before rendering the popup
         let help_popup_text = vec![
+            Line::from(vec![Span::styled("--- CLI Commands ---", Style::default().add_modifier(Modifier::BOLD))]),
+            Line::from(vec![Span::styled(" deckdriod -v      ", Style::default().fg(Color::Cyan)), Span::raw(": Show version info")]),
+            Line::from(vec![Span::styled(" deckdriod update  ", Style::default().fg(Color::Cyan)), Span::raw(": Update to latest version")]),
+            Line::from(vec![Span::raw("")]),
             Line::from(vec![Span::styled("--- Controls ---", Style::default().add_modifier(Modifier::BOLD))]),
             Line::from(vec![Span::styled(" r / Enter ", Style::default().fg(Color::Cyan)), Span::raw(": Build & Launch")]),
             Line::from(vec![Span::styled(" c         ", Style::default().fg(Color::Cyan)), Span::raw(": Clear Logs & Crash Alert")]),
