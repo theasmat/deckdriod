@@ -340,7 +340,7 @@ async fn main() -> Result<()> {
                                 app.state.selection_start = None;
                             }
                             MouseEventKind::Down(_) => {
-                                let log_area_top = if app.state.mode == AppMode::Normal { 6 } else { 9 };
+                                let log_area_top = if app.state.mode == AppMode::Normal { 5 } else { 8 };
                                 if mouse.row >= log_area_top {
                                     app.state.selection_start = Some(app.state.log_scroll as usize + (mouse.row - log_area_top) as usize);
                                     app.state.selection_end = app.state.selection_start;
@@ -349,11 +349,11 @@ async fn main() -> Result<()> {
                                 }
                             }
                             MouseEventKind::Drag(_) => {
-                                let log_area_top = if app.state.mode == AppMode::Normal { 6 } else { 9 };
+                                let log_area_top = if app.state.mode == AppMode::Normal { 5 } else { 8 };
                                 let term_height = terminal.size().unwrap_or(ratatui::layout::Size::new(0, 80)).height;
                                 let log_area_bottom = term_height.saturating_sub(2);
 
-                                if let Some(start) = app.state.selection_start {
+                                if let Some(_start) = app.state.selection_start {
                                     let current_row_idx = app.state.log_scroll as usize + (mouse.row.saturating_sub(log_area_top)) as usize;
                                     app.state.selection_end = Some(current_row_idx);
 
