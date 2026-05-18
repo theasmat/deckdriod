@@ -332,10 +332,43 @@ async fn main() -> Result<()> {
                             MouseEventKind::ScrollUp => {
                                 app.state.autoscroll = false;
                                 app.state.log_scroll = app.state.log_scroll.saturating_sub(1);
+                                app.state.selection_start = None;
                             }
                             MouseEventKind::ScrollDown => {
                                 app.state.autoscroll = false;
                                 app.state.log_scroll = app.state.log_scroll.saturating_add(1);
+                                app.state.selection_start = None;
+                            }
+                            MouseEventKind::Down(_) => {
+                                let log_area_top = if app.state.mode == AppMode::Normal { 6 } else { 9 };
+                                if mouse.row >= log_area_top {
+                                    app.state.selection_start = Some(app.state.log_scroll as usize + (mouse.row - log_area_top) as usize);
+                                    app.state.selection_end = app.state.selection_start;
+                                } else {
+                                    app.state.selection_start = None;
+                                }
+                            }
+                            MouseEventKind::Drag(_) => {
+                                let log_area_top = if app.state.mode == AppMode::Normal { 6 } else { 9 };
+                                let term_height = terminal.size().unwrap_or(ratatui::layout::Size::new(0, 80)).height;
+                                let log_area_bottom = term_height.saturating_sub(2);
+
+                                if let Some(start) = app.state.selection_start {
+                                    let current_row_idx = app.state.log_scroll as usize + (mouse.row.saturating_sub(log_area_top)) as usize;
+                                    app.state.selection_end = Some(current_row_idx);
+
+                                    // Boundary Auto-scroll
+                                    if mouse.row <= log_area_top + 1 {
+                                        app.state.log_scroll = app.state.log_scroll.saturating_sub(1);
+                                        app.state.autoscroll = false;
+                                    } else if mouse.row >= log_area_bottom {
+                                        let max_scroll = app.current_log_len().saturating_sub(1) as u16;
+                                        if app.state.log_scroll < max_scroll {
+                                            app.state.log_scroll += 1;
+                                            app.state.autoscroll = false;
+                                        }
+                                    }
+                                }
                             }
                             _ => {}
                         }

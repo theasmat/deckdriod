@@ -73,6 +73,8 @@ pub struct AppState {
     pub settings_index: usize,
     pub log_scroll: u16,
     pub mouse_captured: bool,
+    pub selection_start: Option<usize>,
+    pub selection_end: Option<usize>,
 }
 
 impl Default for AppState {
@@ -99,7 +101,9 @@ impl Default for AppState {
             last_rebuild_at: None,
             settings_index: 0,
             log_scroll: 0,
-            mouse_captured: false,
+            mouse_captured: true,
+            selection_start: None,
+            selection_end: None,
         }
     }
 }
