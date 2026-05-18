@@ -553,12 +553,12 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
 fn ui(f: &mut ratatui::Frame, app: &mut App) {
     let mut main_constraints = vec![
         Constraint::Length(3), // Tabs
-        Constraint::Length(9), // Header area
-        Constraint::Min(0),    // Logs
-        Constraint::Length(3), // Help
+        Constraint::Min(0),    // Main Content
     ];
+    
+    // Global Input bar if needed
     if app.state.mode == AppMode::Search || app.state.mode == AppMode::Input || app.state.mode == AppMode::DeepLink {
-        main_constraints.insert(2, Constraint::Length(3)); // Input bar
+        main_constraints.insert(1, Constraint::Length(3));
     }
 
     let chunks = Layout::default()
@@ -566,6 +566,7 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
         .constraints(main_constraints)
         .split(f.area());
 
+    // Tabs Widget
     let tab_titles = vec![" [1] Dashboard ", " [2] App ", " [3] Build ", " [4] Errors "];
     let tabs = Tabs::new(tab_titles)
         .block(Block::default().borders(Borders::ALL).title(" Views "))
@@ -577,96 +578,128 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
         .highlight_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
     f.render_widget(tabs, chunks[0]);
 
-    let header_chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
-        .split(chunks[1]);
-
-    let w_status = if app.state.auto_rebuild { "ON".green() } else { "OFF".red() };
-    let o_status = if app.state.auto_open { "ON".green() } else { "OFF".red() };
-    let l_status = if app.state.show_logs { "ON".green() } else { "OFF".red() };
-    let scroll_status = if app.state.autoscroll { "FOLLOW".cyan() } else { "PAUSED".yellow() };
-    let record_status = if app.state.is_recording { "REC".red().bold() } else { "OFF".dark_gray() };
-    let layout_status = if app.state.show_layout_bounds { "ON".green() } else { "OFF".dark_gray() };
-
-    let mut header_text = vec![
-        Line::from(vec![
-            Span::styled(" DeckDriod Server ", Style::default().add_modifier(Modifier::BOLD).fg(Color::Cyan)),
-            Span::raw(format!("({})", app.state.device_serial.as_deref().unwrap_or("none"))),
-            Span::raw("  REC: "), record_status,
-            Span::raw("  BAT: "), 
-            match app.state.stats.battery_level {
-                Some(l) => Span::styled(format!("{}%", l), if l < 20 { Style::default().fg(Color::Red) } else { Style::default().fg(Color::Green) }),
-                None => Span::raw("--%"),
-            },
-        ]),
-        Line::from(vec![Span::raw(" App ID  "), Span::styled(&app.config.app_id, Style::default().fg(Color::DarkGray))]),
-        Line::from(vec![
-            Span::raw(" Status  "),
-            Span::raw("watcher: "), w_status,
-            Span::raw("  open: "), o_status,
-            Span::raw("  logs: "), l_status,
-            Span::raw("  bounds: "), layout_status,
-        ]),
-        Line::from(vec![
-            Span::raw(" Scroll  "), scroll_status,
-            Span::raw("  level: "), Span::styled(format!("{:?}", app.state.min_log_level), Style::default().fg(Color::Yellow)),
-        ]),
-    ];
-
-    if let Some(ref task) = app.state.build_task {
-        header_text.push(Line::from(vec![Span::styled(" BUILD   ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)), Span::styled(task, Style::default().fg(Color::Yellow))]));
-    } else if !app.state.build_history.is_empty() {
-        let history: Vec<String> = app.state.build_history.iter().map(|d| format!("{:.1}s", d.as_secs_f32())).collect();
-        header_text.push(Line::from(vec![Span::raw(" History "), Span::styled(history.join(" -> "), Style::default().fg(Color::DarkGray))]));
-    }
-
-    header_text.push(Line::from(vec![Span::raw(" Search  "), Span::styled(&app.state.search_query, Style::default().fg(Color::Magenta))]));
-
-    if let Some(ref crash) = app.state.last_crash {
-        header_text.push(Line::from(vec![Span::styled(" CRASH   ", Style::default().bg(Color::Red).fg(Color::White).add_modifier(Modifier::BOLD)), Span::styled(crash, Style::default().fg(Color::Red))]));
-    }
-
-    f.render_widget(Paragraph::new(header_text).block(Block::default().borders(Borders::ALL).title(" Dashboard ")).wrap(Wrap { trim: true }), header_chunks[0]);
-
-    let cpu_data: Vec<u64> = app.state.stats.cpu_usage.iter().map(|&v| (v * 10.0) as u64).collect();
-    let mem_data: Vec<u64> = app.state.stats.mem_usage.iter().map(|&v| (v * 10.0) as u64).collect();
-
-    let stats_block = Block::default().borders(Borders::ALL).title(" Resource Usage ");
-    let inner_stats = stats_block.inner(header_chunks[1]);
-    f.render_widget(stats_block, header_chunks[1]);
-
-    let stats_layout = Layout::default().direction(Direction::Vertical).constraints([Constraint::Length(3), Constraint::Length(3)]).split(inner_stats);
-    f.render_widget(Sparkline::default().block(Block::default().title(format!(" CPU: {:.1}% ", app.state.stats.last_cpu))).data(&cpu_data).style(Style::default().fg(Color::Green)), stats_layout[0]);
-    f.render_widget(Sparkline::default().block(Block::default().title(format!(" MEM: {:.1}% ", app.state.stats.last_mem))).data(&mem_data).style(Style::default().fg(Color::Blue)), stats_layout[1]);
-
-    let mut log_chunk_idx = 2;
+    let mut content_chunk_idx = 1;
     if app.state.mode == AppMode::Search || app.state.mode == AppMode::Input || app.state.mode == AppMode::DeepLink {
         let title = match app.state.mode { AppMode::Search => " Search Logs ", AppMode::DeepLink => " Deep Link URL ", _ => " Input " };
-        f.render_widget(Paragraph::new(app.state.input_buffer.as_str()).block(Block::default().borders(Borders::ALL).title(title).border_style(Style::default().fg(Color::Yellow))), chunks[2]);
-        log_chunk_idx = 3;
+        f.render_widget(Paragraph::new(app.state.input_buffer.as_str()).block(Block::default().borders(Borders::ALL).title(title).border_style(Style::default().fg(Color::Yellow))), chunks[1]);
+        content_chunk_idx = 2;
     }
 
-    let logs_to_render = match app.state.current_tab {
-        Tab::Dashboard => &app.cache_all, Tab::App => &app.cache_app,
-        Tab::Build => &app.cache_build, Tab::Errors => &app.cache_err,
-    };
+    let main_area = chunks[content_chunk_idx];
 
-    let log_items: Vec<ListItem> = logs_to_render.iter().map(|l| {
-        let style = if l.contains("[err]") || l.contains("[build-err]") { Style::default().fg(Color::Red) } else if l.contains("[ok]") { Style::default().fg(Color::Green) } else if l.contains("[build]") { Style::default().fg(Color::Yellow) } else if l.contains(" E/") { Style::default().fg(Color::Red) } else if l.contains(" W/") { Style::default().fg(Color::Yellow) } else if l.contains(" I/") { Style::default().fg(Color::Cyan) } else { Style::default() };
-        ListItem::new(Line::from(Span::styled(l.clone(), style)))
-    }).collect();
+    match app.state.current_tab {
+        Tab::Dashboard => {
+            let dash_chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(10), // Info + Stats
+                    Constraint::Min(0),     // Expanded Help
+                ])
+                .split(main_area);
 
-    let log_title = match app.state.current_tab {
-        Tab::Dashboard => " All Logs ", Tab::App => " App Logs (Logcat) ",
-        Tab::Build => " Build Logs (Gradle) ", Tab::Errors => " Errors & Crashes ",
-    };
+            let header_chunks = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                .split(dash_chunks[0]);
 
-    f.render_stateful_widget(List::new(log_items).block(Block::default().borders(Borders::ALL).title(log_title)).highlight_style(Style::default().add_modifier(Modifier::BOLD).bg(Color::DarkGray)), chunks[log_chunk_idx], &mut app.log_state);
+            // 1. Dashboard Info
+            let w_status = if app.state.auto_rebuild { "ON".green() } else { "OFF".red() };
+            let o_status = if app.state.auto_open { "ON".green() } else { "OFF".red() };
+            let l_status = if app.state.show_logs { "ON".green() } else { "OFF".red() };
+            let record_status = if app.state.is_recording { "REC".red().bold() } else { "OFF".dark_gray() };
+            let layout_status = if app.state.show_layout_bounds { "ON".green() } else { "OFF".dark_gray() };
 
-    let help_chunk_idx = chunks.len() - 1;
-    f.render_widget(Paragraph::new(vec![Line::from(vec!["[Tab] views [1-4] switch [Alt+1-5] lvl [r] build [c] clear [h] help [q] quit".cyan().italic()])]).block(Block::default().borders(Borders::ALL).title(" Help ")), chunks[help_chunk_idx]);
+            let mut header_text = vec![
+                Line::from(vec![
+                    Span::styled(" DeckDriod ", Style::default().add_modifier(Modifier::BOLD).fg(Color::Cyan)),
+                    Span::raw(format!("({})", app.state.device_serial.as_deref().unwrap_or("none"))),
+                    Span::raw("  REC: "), record_status,
+                    Span::raw("  BAT: "), 
+                    match app.state.stats.battery_level {
+                        Some(l) => Span::styled(format!("{}%", l), if l < 20 { Style::default().fg(Color::Red) } else { Style::default().fg(Color::Green) }),
+                        None => Span::raw("--%"),
+                    },
+                ]),
+                Line::from(vec![Span::raw(" App ID: "), Span::styled(&app.config.app_id, Style::default().fg(Color::DarkGray))]),
+                Line::from(vec![
+                    Span::raw(" Toggles: "),
+                    Span::raw("Watcher:"), w_status,
+                    Span::raw(" Open:"), o_status,
+                    Span::raw(" Logs:"), l_status,
+                    Span::raw(" Bounds:"), layout_status,
+                ]),
+            ];
 
+            if let Some(ref task) = app.state.build_task {
+                header_text.push(Line::from(vec![Span::styled(" BUILD: ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)), Span::styled(task, Style::default().fg(Color::Yellow))]));
+            } else if !app.state.build_history.is_empty() {
+                let history: Vec<String> = app.state.build_history.iter().map(|d| format!("{:.1}s", d.as_secs_f32())).collect();
+                header_text.push(Line::from(vec![Span::raw(" Build Hist: "), Span::styled(history.join(" → "), Style::default().fg(Color::DarkGray))]));
+            }
+
+            if let Some(ref crash) = app.state.last_crash {
+                header_text.push(Line::from(vec![Span::styled(" CRASH: ", Style::default().bg(Color::Red).fg(Color::White).add_modifier(Modifier::BOLD)), Span::styled(crash, Style::default().fg(Color::Red))]));
+            }
+
+            f.render_widget(Paragraph::new(header_text).block(Block::default().borders(Borders::ALL).title(" Device Status ")).wrap(Wrap { trim: true }), header_chunks[0]);
+
+            // 2. Resource Stats
+            let cpu_data: Vec<u64> = app.state.stats.cpu_usage.iter().map(|&v| (v * 10.0) as u64).collect();
+            let mem_data: Vec<u64> = app.state.stats.mem_usage.iter().map(|&v| (v * 10.0) as u64).collect();
+            let stats_block = Block::default().borders(Borders::ALL).title(" Resource Usage ");
+            let inner_stats = stats_block.inner(header_chunks[1]);
+            f.render_widget(stats_block, header_chunks[1]);
+            let stats_layout = Layout::default().direction(Direction::Vertical).constraints([Constraint::Length(3), Constraint::Length(3)]).split(inner_stats);
+            f.render_widget(Sparkline::default().block(Block::default().title(format!(" CPU: {:.1}% ", app.state.stats.last_cpu))).data(&cpu_data).style(Style::default().fg(Color::Green)), stats_layout[0]);
+            f.render_widget(Sparkline::default().block(Block::default().title(format!(" MEM: {:.1}% ", app.state.stats.last_mem))).data(&mem_data).style(Style::default().fg(Color::Blue)), stats_layout[1]);
+
+            // 3. Expanded Command List
+            let commands_text = vec![
+                Line::from(vec![Span::styled(" [r/Enter]", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)), Span::raw(" Build & Launch App      "), Span::styled("[v]", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)), Span::raw(" Start/Stop Recording")]),
+                Line::from(vec![Span::styled(" [/]", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)), Span::raw(" Search Logs             "), Span::styled("[s]", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)), Span::raw(" Take Screenshot     ")]),
+                Line::from(vec![Span::styled(" [c]", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)), Span::raw(" Clear Logs & Alerts     "), Span::styled("[u]", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)), Span::raw(" Open Deep Link URL  ")]),
+                Line::from(vec![Span::styled(" [i]", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)), Span::raw(" Project Settings        "), Span::styled("[b]", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)), Span::raw(" Toggle Layout Bounds")]),
+                Line::from(vec![Span::styled(" [e]", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)), Span::raw(" Export to .txt file     "), Span::styled("[d]", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)), Span::raw(" Android Dev Menu    ")]),
+                Line::from(vec![Span::styled(" [y]", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)), Span::raw(" Copy Selected Line      "), Span::styled("[x]", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)), Span::raw(" Clear App Data      ")]),
+                Line::from(vec![Span::styled(" [1-4]", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)), Span::raw(" Switch Views            "), Span::styled("[q]", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)), Span::raw(" Quit DeckDriod      ")]),
+                Line::from(vec![Span::raw("")]),
+                Line::from(vec![Span::styled(" Log Levels: ", Style::default().add_modifier(Modifier::BOLD)), Span::raw("Alt + [1]Verbose [2]Debug [3]Info [4]Warn [5]Error")]),
+                Line::from(vec![Span::styled(" Navigation: ", Style::default().add_modifier(Modifier::BOLD)), Span::raw("Up/Down/Wheel to Scroll, [G] Follow Bottom, [h] Help Popup")]),
+            ];
+            f.render_widget(Paragraph::new(commands_text).block(Block::default().borders(Borders::ALL).title(" Quick Commands ")), dash_chunks[1]);
+        }
+        _ => {
+            // Log Views (App, Build, Errors)
+            let logs_to_render = match app.state.current_tab {
+                Tab::Dashboard => unreachable!(),
+                Tab::App => &app.cache_app,
+                Tab::Build => &app.cache_build,
+                Tab::Errors => &app.cache_err,
+            };
+
+            let log_items: Vec<ListItem> = logs_to_render.iter().map(|l| {
+                let style = if l.contains("[err]") || l.contains("[build-err]") { Style::default().fg(Color::Red) } else if l.contains("[ok]") { Style::default().fg(Color::Green) } else if l.contains("[build]") { Style::default().fg(Color::Yellow) } else if l.contains(" E/") { Style::default().fg(Color::Red) } else if l.contains(" W/") { Style::default().fg(Color::Yellow) } else if l.contains(" I/") { Style::default().fg(Color::Cyan) } else { Style::default() };
+                ListItem::new(Line::from(Span::styled(l.clone(), style)))
+            }).collect();
+
+            let log_title = match app.state.current_tab {
+                Tab::App => " App Logs (Logcat) ",
+                Tab::Build => " Build Logs (Gradle) ",
+                Tab::Errors => " Errors & Crashes ",
+                _ => " Logs ",
+            };
+
+            f.render_stateful_widget(
+                List::new(log_items)
+                    .block(Block::default().borders(Borders::ALL).title(log_title))
+                    .highlight_style(Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD)), 
+                main_area, 
+                &mut app.log_state
+            );
+        }
+    }
+
+    // Modal Overlays
     if app.state.mode == AppMode::Help || app.state.mode == AppMode::Welcome {
         let area = centered_rect(70, 70, f.area());
         f.render_widget(Clear, area);
