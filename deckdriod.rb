@@ -1,7 +1,7 @@
 class Deckdriod < Formula
   desc "Professional Android Development Dashboard"
   homepage "https://github.com/theasmat/deckdriod"
-  version "0.1.12"
+  version "0.1.13"
 
   if OS.mac?
     if Hardware::CPU.arm?

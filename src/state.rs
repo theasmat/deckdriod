@@ -99,7 +99,7 @@ impl Default for AppState {
             last_rebuild_at: None,
             settings_index: 0,
             log_scroll: 0,
-            mouse_captured: true,
+            mouse_captured: false,
         }
     }
 }
