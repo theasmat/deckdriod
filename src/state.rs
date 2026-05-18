@@ -41,6 +41,14 @@ pub struct SystemStats {
     pub battery_level: Option<u8>,
 }
 
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum Tab {
+    Dashboard,
+    App,
+    Build,
+    Errors,
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub auto_rebuild: bool,
@@ -48,6 +56,7 @@ pub struct AppState {
     pub show_logs: bool,
     pub device_serial: Option<String>,
     pub mode: AppMode,
+    pub current_tab: Tab,
     pub input_buffer: String,
     pub search_query: String,
     pub autoscroll: bool,
@@ -70,6 +79,7 @@ impl Default for AppState {
             show_logs: true,
             device_serial: None,
             mode: AppMode::Normal,
+            current_tab: Tab::Dashboard,
             input_buffer: String::new(),
             search_query: String::new(),
             autoscroll: true,

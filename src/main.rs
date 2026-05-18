@@ -19,7 +19,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style, Stylize},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap, Sparkline, Clear},
+    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap, Sparkline, Clear, Tabs},
     Terminal,
 };
 use std::io::stdout;
@@ -28,7 +28,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use state::{AppMode, LogLevel};
+use state::{AppMode, LogLevel, Tab};
 use commands::BuildEvent;
 
 struct App {
@@ -36,7 +36,10 @@ struct App {
     state: AppState,
     logs: VecDeque<String>,
     log_state: ListState,
-    cached_filtered_logs: Vec<String>,
+    cache_all: Vec<String>,
+    cache_app: Vec<String>,
+    cache_build: Vec<String>,
+    cache_err: Vec<String>,
 }
 
 impl App {
@@ -46,7 +49,10 @@ impl App {
             state,
             logs: VecDeque::with_capacity(5000),
             log_state: ListState::default(),
-            cached_filtered_logs: Vec::new(),
+            cache_all: Vec::new(),
+            cache_app: Vec::new(),
+            cache_build: Vec::new(),
+            cache_err: Vec::new(),
         }
     }
 
@@ -63,10 +69,30 @@ impl App {
         self.logs.push_back(log);
         
         if self.matches_filter(&l) {
-            self.cached_filtered_logs.push(l);
-            if self.cached_filtered_logs.len() > 5000 { self.cached_filtered_logs.remove(0); }
+            self.cache_all.push(l.clone());
+            if self.cache_all.len() > 5000 { self.cache_all.remove(0); }
+            
+            if l.contains("[build]") || l.contains("[build-err]") {
+                self.cache_build.push(l.clone());
+                if self.cache_build.len() > 5000 { self.cache_build.remove(0); }
+            } else {
+                self.cache_app.push(l.clone());
+                if self.cache_app.len() > 5000 { self.cache_app.remove(0); }
+            }
+
+            if l.contains(" E/") || l.contains("[err]") || l.contains("[build-err]") || l.contains("FATAL") {
+                self.cache_err.push(l.clone());
+                if self.cache_err.len() > 5000 { self.cache_err.remove(0); }
+            }
+
             if self.state.autoscroll {
-                self.log_state.select(Some(self.cached_filtered_logs.len().saturating_sub(1)));
+                let current_cache_len = match self.state.current_tab {
+                    Tab::Dashboard => self.cache_all.len(),
+                    Tab::App => self.cache_app.len(),
+                    Tab::Build => self.cache_build.len(),
+                    Tab::Errors => self.cache_err.len(),
+                };
+                self.log_state.select(Some(current_cache_len.saturating_sub(1)));
             }
         }
     }
@@ -86,13 +112,33 @@ impl App {
     }
 
     fn refresh_filter_cache(&mut self) {
-        self.cached_filtered_logs = self.logs.iter()
-            .filter(|l| self.matches_filter(l))
-            .cloned()
-            .collect();
+        self.cache_all.clear();
+        self.cache_app.clear();
+        self.cache_build.clear();
+        self.cache_err.clear();
+
+        for l in &self.logs {
+            if self.matches_filter(l) {
+                self.cache_all.push(l.clone());
+                if l.contains("[build]") || l.contains("[build-err]") {
+                    self.cache_build.push(l.clone());
+                } else {
+                    self.cache_app.push(l.clone());
+                }
+                if l.contains(" E/") || l.contains("[err]") || l.contains("[build-err]") || l.contains("FATAL") {
+                    self.cache_err.push(l.clone());
+                }
+            }
+        }
         
         if self.state.autoscroll {
-            self.log_state.select(Some(self.cached_filtered_logs.len().saturating_sub(1)));
+            let current_cache_len = match self.state.current_tab {
+                Tab::Dashboard => self.cache_all.len(),
+                Tab::App => self.cache_app.len(),
+                Tab::Build => self.cache_build.len(),
+                Tab::Errors => self.cache_err.len(),
+            };
+            self.log_state.select(Some(current_cache_len.saturating_sub(1)));
         }
     }
 }
@@ -182,7 +228,7 @@ async fn main() -> Result<()> {
         tokio::select! {
             _ = interval.tick() => {
                 if app.state.show_logs && !log_manager.check_status().await {
-                    let _ = log_manager.start(&serial, &app.config.app_id, tx_log.clone());
+                    let _ = log_manager.start(&serial, &app.config.app_id, tx_log.clone()).await;
                 }
             }
             Some(log) = rx_log.recv() => { app.add_log(log); }
@@ -245,7 +291,13 @@ async fn main() -> Result<()> {
                             MouseEventKind::ScrollDown => {
                                 app.state.autoscroll = false;
                                 let current = app.log_state.selected().unwrap_or(0);
-                                let max = app.cached_filtered_logs.len().saturating_sub(1);
+                                let current_cache_len = match app.state.current_tab {
+                                    Tab::Dashboard => app.cache_all.len(),
+                                    Tab::App => app.cache_app.len(),
+                                    Tab::Build => app.cache_build.len(),
+                                    Tab::Errors => app.cache_err.len(),
+                                };
+                                let max = current_cache_len.saturating_sub(1);
                                 if current < max { app.log_state.select(Some(current + 1)); }
                             }
                             _ => {}
@@ -267,24 +319,23 @@ async fn main() -> Result<()> {
                                         });
                                     }
                                     (KeyCode::Char('c'), _) => {
-                                        app.logs.clear(); app.cached_filtered_logs.clear();
+                                        app.logs.clear(); app.cache_all.clear(); app.cache_app.clear(); app.cache_build.clear(); app.cache_err.clear();
                                         app.state.last_crash = None; app.state.search_query.clear();
                                         log_manager.start(&serial, &app.config.app_id, tx_log.clone()).await?;
-                                        }
-                                        (KeyCode::Char('h'), _) => { app.state.mode = AppMode::Help; }
-                                        (KeyCode::Char('i'), _) => { app.state.mode = AppMode::Settings; app.state.settings_index = 0; }
-                                        (KeyCode::Char('w'), _) => { app.state.auto_rebuild = !app.state.auto_rebuild; }
-                                        (KeyCode::Char('o'), _) => { app.state.auto_open = !app.state.auto_open; }
-                                        (KeyCode::Char('l'), _) => {
+                                    }
+                                    (KeyCode::Char('h'), _) => { app.state.mode = AppMode::Help; }
+                                    (KeyCode::Char('i'), _) => { app.state.mode = AppMode::Settings; app.state.settings_index = 0; }
+                                    (KeyCode::Char('w'), _) => { app.state.auto_rebuild = !app.state.auto_rebuild; }
+                                    (KeyCode::Char('o'), _) => { app.state.auto_open = !app.state.auto_open; }
+                                    (KeyCode::Char('l'), _) => {
                                         app.state.show_logs = !app.state.show_logs;
                                         if app.state.show_logs { log_manager.start(&serial, &app.config.app_id, tx_log.clone()).await?; } else { log_manager.stop(); }
-                                        }
-                                        (KeyCode::Char('s'), _) => {
+                                    }
+                                    (KeyCode::Char('s'), _) => {
                                         let log_tx = tx_log.clone();
                                         let st = app.state.clone();
                                         tokio::spawn(async move { let _ = commands::take_screenshot(&st, log_tx).await; });
-                                        }
-
+                                    }
                                     (KeyCode::Char('v'), _) => {
                                         let rec = Arc::clone(&recorder);
                                         let s = serial.clone();
@@ -328,7 +379,13 @@ async fn main() -> Result<()> {
                                     (KeyCode::Down, _) | (KeyCode::Char('j'), _) => {
                                         app.state.autoscroll = false;
                                         let current = app.log_state.selected().unwrap_or(0);
-                                        let max = app.cached_filtered_logs.len().saturating_sub(1);
+                                        let current_cache_len = match app.state.current_tab {
+                                            Tab::Dashboard => app.cache_all.len(),
+                                            Tab::App => app.cache_app.len(),
+                                            Tab::Build => app.cache_build.len(),
+                                            Tab::Errors => app.cache_err.len(),
+                                        };
+                                        let max = current_cache_len.saturating_sub(1);
                                         if current < max { app.log_state.select(Some(current + 1)); }
                                     }
                                     (KeyCode::PageUp, _) => {
@@ -339,14 +396,26 @@ async fn main() -> Result<()> {
                                     (KeyCode::PageDown, _) => {
                                         app.state.autoscroll = false;
                                         let current = app.log_state.selected().unwrap_or(0);
-                                        let max = app.cached_filtered_logs.len().saturating_sub(1);
+                                        let current_cache_len = match app.state.current_tab {
+                                            Tab::Dashboard => app.cache_all.len(),
+                                            Tab::App => app.cache_app.len(),
+                                            Tab::Build => app.cache_build.len(),
+                                            Tab::Errors => app.cache_err.len(),
+                                        };
+                                        let max = current_cache_len.saturating_sub(1);
                                         app.log_state.select(Some((current + 20).min(max)));
                                     }
                                     (KeyCode::Char('g'), _) => { app.state.autoscroll = false; app.log_state.select(Some(0)); }
                                     (KeyCode::Char('G'), _) => { app.state.autoscroll = true; }
                                     (KeyCode::Char('y'), _) => {
                                         if let Some(idx) = app.log_state.selected() {
-                                            if let Some(line) = app.cached_filtered_logs.get(idx) {
+                                            let current_cache = match app.state.current_tab {
+                                                Tab::Dashboard => &app.cache_all,
+                                                Tab::App => &app.cache_app,
+                                                Tab::Build => &app.cache_build,
+                                                Tab::Errors => &app.cache_err,
+                                            };
+                                            if let Some(line) = current_cache.get(idx) {
                                                 if let Ok(mut clipboard) = arboard::Clipboard::new() {
                                                     let _ = clipboard.set_text(line.clone());
                                                     let _ = tx_log.send("[ok] line yanked to clipboard".to_string());
@@ -354,11 +423,35 @@ async fn main() -> Result<()> {
                                             }
                                         }
                                     }
-                                    (KeyCode::Char('1'), _) => { app.state.min_log_level = LogLevel::Verbose; app.refresh_filter_cache(); }
-                                    (KeyCode::Char('2'), _) => { app.state.min_log_level = LogLevel::Debug; app.refresh_filter_cache(); }
-                                    (KeyCode::Char('3'), _) => { app.state.min_log_level = LogLevel::Info; app.refresh_filter_cache(); }
-                                    (KeyCode::Char('4'), _) => { app.state.min_log_level = LogLevel::Warn; app.refresh_filter_cache(); }
-                                    (KeyCode::Char('5'), _) => { app.state.min_log_level = LogLevel::Error; app.refresh_filter_cache(); }
+                                    (KeyCode::Tab, _) => {
+                                        app.state.current_tab = match app.state.current_tab {
+                                            Tab::Dashboard => Tab::App,
+                                            Tab::App => Tab::Build,
+                                            Tab::Build => Tab::Errors,
+                                            Tab::Errors => Tab::Dashboard,
+                                        };
+                                        app.refresh_filter_cache();
+                                    }
+                                    (KeyCode::BackTab, _) => {
+                                        app.state.current_tab = match app.state.current_tab {
+                                            Tab::Dashboard => Tab::Errors,
+                                            Tab::Errors => Tab::Build,
+                                            Tab::Build => Tab::App,
+                                            Tab::App => Tab::Dashboard,
+                                        };
+                                        app.refresh_filter_cache();
+                                    }
+                                    (KeyCode::Char('1'), m) if !m.contains(KeyModifiers::ALT) => { app.state.current_tab = Tab::Dashboard; app.refresh_filter_cache(); }
+                                    (KeyCode::Char('2'), m) if !m.contains(KeyModifiers::ALT) => { app.state.current_tab = Tab::App; app.refresh_filter_cache(); }
+                                    (KeyCode::Char('3'), m) if !m.contains(KeyModifiers::ALT) => { app.state.current_tab = Tab::Build; app.refresh_filter_cache(); }
+                                    (KeyCode::Char('4'), m) if !m.contains(KeyModifiers::ALT) => { app.state.current_tab = Tab::Errors; app.refresh_filter_cache(); }
+
+                                    (KeyCode::Char('1'), m) if m.contains(KeyModifiers::ALT) => { app.state.min_log_level = LogLevel::Verbose; app.refresh_filter_cache(); }
+                                    (KeyCode::Char('2'), m) if m.contains(KeyModifiers::ALT) => { app.state.min_log_level = LogLevel::Debug; app.refresh_filter_cache(); }
+                                    (KeyCode::Char('3'), m) if m.contains(KeyModifiers::ALT) => { app.state.min_log_level = LogLevel::Info; app.refresh_filter_cache(); }
+                                    (KeyCode::Char('4'), m) if m.contains(KeyModifiers::ALT) => { app.state.min_log_level = LogLevel::Warn; app.refresh_filter_cache(); }
+                                    (KeyCode::Char('5'), m) if m.contains(KeyModifiers::ALT) => { app.state.min_log_level = LogLevel::Error; app.refresh_filter_cache(); }
+
                                     (KeyCode::Char(c), _) => {
                                         if let Some(cmd_str) = app.config.custom_commands.get(&c.to_ascii_lowercase()) {
                                             let cmd = cmd_str.clone();
@@ -467,12 +560,13 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
 
 fn ui(f: &mut ratatui::Frame, app: &mut App) {
     let mut main_constraints = vec![
+        Constraint::Length(3), // Tabs
         Constraint::Length(9), // Header area
         Constraint::Min(0),    // Logs
         Constraint::Length(3), // Help
     ];
     if app.state.mode == AppMode::Search || app.state.mode == AppMode::Input || app.state.mode == AppMode::DeepLink {
-        main_constraints.insert(1, Constraint::Length(3)); // Input bar
+        main_constraints.insert(2, Constraint::Length(3)); // Input bar
     }
 
     let chunks = Layout::default()
@@ -480,10 +574,24 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
         .constraints(main_constraints)
         .split(f.area());
 
+    // Tabs
+    let tab_titles = vec![" [1] Dashboard ", " [2] App ", " [3] Build ", " [4] Errors "];
+    let tabs = Tabs::new(tab_titles)
+        .block(Block::default().borders(Borders::ALL).title(" Views "))
+        .select(match app.state.current_tab {
+            Tab::Dashboard => 0,
+            Tab::App => 1,
+            Tab::Build => 2,
+            Tab::Errors => 3,
+        })
+        .style(Style::default().fg(Color::Cyan))
+        .highlight_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
+    f.render_widget(tabs, chunks[0]);
+
     let header_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
-        .split(chunks[0]);
+        .split(chunks[1]);
 
     let w_status = if app.state.auto_rebuild { "ON".green() } else { "OFF".red() };
     let o_status = if app.state.auto_open { "ON".green() } else { "OFF".red() };
@@ -543,22 +651,36 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
     f.render_widget(Sparkline::default().block(Block::default().title(format!(" CPU: {:.1}% ", app.state.stats.last_cpu))).data(&cpu_data).style(Style::default().fg(Color::Green)), stats_layout[0]);
     f.render_widget(Sparkline::default().block(Block::default().title(format!(" MEM: {:.1}% ", app.state.stats.last_mem))).data(&mem_data).style(Style::default().fg(Color::Blue)), stats_layout[1]);
 
-    let mut log_chunk_idx = 1;
+    let mut log_chunk_idx = 2;
     if app.state.mode == AppMode::Search || app.state.mode == AppMode::Input || app.state.mode == AppMode::DeepLink {
         let title = match app.state.mode { AppMode::Search => " Search Logs ", AppMode::DeepLink => " Deep Link URL ", _ => " Input " };
-        f.render_widget(Paragraph::new(app.state.input_buffer.as_str()).block(Block::default().borders(Borders::ALL).title(title).border_style(Style::default().fg(Color::Yellow))), chunks[1]);
-        log_chunk_idx = 2;
+        f.render_widget(Paragraph::new(app.state.input_buffer.as_str()).block(Block::default().borders(Borders::ALL).title(title).border_style(Style::default().fg(Color::Yellow))), chunks[2]);
+        log_chunk_idx = 3;
     }
 
-    let log_items: Vec<ListItem> = app.cached_filtered_logs.iter().map(|l| {
+    let logs_to_render = match app.state.current_tab {
+        Tab::Dashboard => &app.cache_all,
+        Tab::App => &app.cache_app,
+        Tab::Build => &app.cache_build,
+        Tab::Errors => &app.cache_err,
+    };
+
+    let log_items: Vec<ListItem> = logs_to_render.iter().map(|l| {
         let style = if l.contains("[err]") || l.contains("[build-err]") { Style::default().fg(Color::Red) } else if l.contains("[ok]") { Style::default().fg(Color::Green) } else if l.contains("[build]") { Style::default().fg(Color::Yellow) } else if l.contains(" E/") { Style::default().fg(Color::Red) } else if l.contains(" W/") { Style::default().fg(Color::Yellow) } else if l.contains(" I/") { Style::default().fg(Color::Cyan) } else { Style::default() };
         ListItem::new(Line::from(Span::styled(l.clone(), style)))
     }).collect();
 
-    f.render_stateful_widget(List::new(log_items).block(Block::default().borders(Borders::ALL).title(" Logs ")).highlight_style(Style::default().add_modifier(Modifier::BOLD).bg(Color::DarkGray)), chunks[log_chunk_idx], &mut app.log_state);
+    let log_title = match app.state.current_tab {
+        Tab::Dashboard => " All Logs ",
+        Tab::App => " App Logs (Logcat) ",
+        Tab::Build => " Build Logs (Gradle) ",
+        Tab::Errors => " Errors & Crashes ",
+    };
+
+    f.render_stateful_widget(List::new(log_items).block(Block::default().borders(Borders::ALL).title(log_title)).highlight_style(Style::default().add_modifier(Modifier::BOLD).bg(Color::DarkGray)), chunks[log_chunk_idx], &mut app.log_state);
 
     let help_chunk_idx = chunks.len() - 1;
-    f.render_widget(Paragraph::new(vec![Line::from(vec!["[r] build [c] clear [/] search [e] export [h] help [i] settings [q] quit".cyan().italic()])]).block(Block::default().borders(Borders::ALL).title(" Help ")), chunks[help_chunk_idx]);
+    f.render_widget(Paragraph::new(vec![Line::from(vec!["[Tab] cycle views [1-4] switch view [Alt+1-5] log level [h] help [q] quit".cyan().italic()])]).block(Block::default().borders(Borders::ALL).title(" Help ")), chunks[help_chunk_idx]);
 
     if app.state.mode == AppMode::Help || app.state.mode == AppMode::Welcome {
         let area = centered_rect(70, 70, f.area());
@@ -569,23 +691,18 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
             Line::from(vec![Span::styled(" deckdriod -v      ", Style::default().fg(Color::Cyan)), Span::raw(": Show version info")]),
             Line::from(vec![Span::styled(" deckdriod update  ", Style::default().fg(Color::Cyan)), Span::raw(": Update to latest version")]),
             Line::from(vec![Span::raw("")]),
+            Line::from(vec![Span::styled("--- Views ---", Style::default().add_modifier(Modifier::BOLD))]),
+            Line::from(vec![Span::styled(" Tab / 1-4 ", Style::default().fg(Color::Cyan)), Span::raw(": Switch between Dashboard, App, Build, Errors")]),
+            Line::from(vec![Span::raw("")]),
             Line::from(vec![Span::styled("--- Controls ---", Style::default().add_modifier(Modifier::BOLD))]),
             Line::from(vec![Span::styled(" r / Enter ", Style::default().fg(Color::Cyan)), Span::raw(": Build & Launch")]),
             Line::from(vec![Span::styled(" c         ", Style::default().fg(Color::Cyan)), Span::raw(": Clear Logs & Crash Alert")]),
             Line::from(vec![Span::styled(" i         ", Style::default().fg(Color::Cyan)), Span::raw(": Open Settings Menu")]),
-            Line::from(vec![Span::styled(" v         ", Style::default().fg(Color::Cyan)), Span::raw(": Start/Stop Screen Recording")]),
-            Line::from(vec![Span::styled(" s         ", Style::default().fg(Color::Cyan)), Span::raw(": Take Screenshot")]),
-            Line::from(vec![Span::styled(" u         ", Style::default().fg(Color::Cyan)), Span::raw(": Open Deep Link")]),
-            Line::from(vec![Span::styled(" b         ", Style::default().fg(Color::Cyan)), Span::raw(": Toggle Layout Bounds")]),
+            Line::from(vec![Span::styled(" Alt + 1-5 ", Style::default().fg(Color::Cyan)), Span::raw(": Set Min Log Level")]),
             Line::from(vec![Span::styled(" /         ", Style::default().fg(Color::Cyan)), Span::raw(": Search Logs")]),
-            Line::from(vec![Span::styled(" 1-5       ", Style::default().fg(Color::Cyan)), Span::raw(": Set Min Log Level")]),
-            Line::from(vec![Span::styled(" k / j     ", Style::default().fg(Color::Cyan)), Span::raw(": Scroll Up/Down (Wheel works too)")]),
-            Line::from(vec![Span::styled(" PgUp/PgDn ", Style::default().fg(Color::Cyan)), Span::raw(": Scroll 20 lines")]),
-            Line::from(vec![Span::styled(" G         ", Style::default().fg(Color::Cyan)), Span::raw(": Follow Bottom")]),
-            Line::from(vec![Span::styled(" y         ", Style::default().fg(Color::Cyan)), Span::raw(": Yank (Copy) line to Clipboard")]),
-            Line::from(vec![Span::styled(" e         ", Style::default().fg(Color::Cyan)), Span::raw(": Export Logs to deckdriod_logs.txt")]),
-            Line::from(vec![Span::styled(" d         ", Style::default().fg(Color::Cyan)), Span::raw(": Android Dev Menu")]),
-            Line::from(vec![Span::styled(" x         ", Style::default().fg(Color::Cyan)), Span::raw(": Clear App Data")]),
+            Line::from(vec![Span::styled(" k / j     ", Style::default().fg(Color::Cyan)), Span::raw(": Scroll Up/Down")]),
+            Line::from(vec![Span::styled(" y         ", Style::default().fg(Color::Cyan)), Span::raw(": Yank (Copy) line")]),
+            Line::from(vec![Span::styled(" e         ", Style::default().fg(Color::Cyan)), Span::raw(": Export Logs")]),
             Line::from(vec![Span::raw("")]),
             Line::from(vec![Span::styled(" Esc / h   ", Style::default().fg(Color::Cyan)), Span::raw(": Close Menu")]),
             Line::from(vec![Span::styled(" q         ", Style::default().fg(Color::Cyan)), Span::raw(": Quit")]),
