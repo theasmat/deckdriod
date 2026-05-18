@@ -72,6 +72,7 @@ pub struct AppState {
     pub last_rebuild_at: Option<std::time::Instant>,
     pub settings_index: usize,
     pub log_scroll: u16,
+    pub mouse_captured: bool,
 }
 
 impl Default for AppState {
@@ -98,6 +99,7 @@ impl Default for AppState {
             last_rebuild_at: None,
             settings_index: 0,
             log_scroll: 0,
+            mouse_captured: true,
         }
     }
 }

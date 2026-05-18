@@ -451,8 +451,32 @@ async fn main() -> Result<()> {
                                             let _ = tx_log.send("[warn] no crash trace available to yank".to_string());
                                         }
                                     }
+                                    (KeyCode::Char('m'), _) => {
+                                        app.state.mouse_captured = !app.state.mouse_captured;
+                                        if app.state.mouse_captured {
+                                            let _ = execute!(std::io::stdout(), EnableMouseCapture);
+                                            let _ = tx_log.send("[info] mouse capture ON (smooth scrolling)".to_string());
+                                        } else {
+                                            let _ = execute!(std::io::stdout(), DisableMouseCapture);
+                                            let _ = tx_log.send("[info] mouse capture OFF (native selection enabled)".to_string());
+                                        }
+                                    }
+                                    (KeyCode::Char('A'), _) => {
+                                        let current_cache = match app.state.current_tab {
+                                            Tab::Dashboard => &app.cache_all, Tab::App => &app.cache_app,
+                                            Tab::Build => &app.cache_build, Tab::Errors => &app.cache_err,
+                                        };
+                                        if !current_cache.is_empty() {
+                                            let content = current_cache.join("\n");
+                                            if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                                                let _ = clipboard.set_text(content);
+                                                let _ = tx_log.send("[ok] all visible logs yanked to clipboard".to_string());
+                                            }
+                                            }
+                                            }
 
-                                    (KeyCode::Tab, _) => {
+                                            (KeyCode::Tab, _) => {
+
                                         app.state.current_tab = match app.state.current_tab {
                                             Tab::Dashboard => Tab::App, Tab::App => Tab::Build,
                                             Tab::Build => Tab::Errors, Tab::Errors => Tab::Dashboard,
@@ -607,15 +631,17 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
     let o_status = if app.state.auto_open { "ON".green() } else { "OFF".red() };
     let l_status = if app.state.show_logs { "ON".green() } else { "OFF".red() };
     let record_status = if app.state.is_recording { "REC".red().bold() } else { "OFF".dark_gray() };
-    let battery = match app.state.stats.battery_level {
-        Some(l) => format!("BAT:{}%", l).fg(if l < 20 { Color::Red } else { Color::Green }),
-        None => "BAT:--%".dark_gray(),
+    let mouse_status = if app.state.mouse_captured { "APP".cyan() } else { "NATIVE".yellow().bold() };
+    let battery_span = match app.state.stats.battery_level {
+        Some(l) => Span::styled(format!("BAT:{}%", l), if l < 20 { Style::default().fg(Color::Red) } else { Style::default().fg(Color::Green) }),
+        None => Span::raw("BAT:--%").dark_gray(),
     };
 
     let header_line = Line::from(vec![
         Span::styled(" DeckDriod ", Style::default().add_modifier(Modifier::BOLD).fg(Color::Cyan)),
         Span::raw(format!("({}) ", app.state.device_serial.as_deref().unwrap_or("none"))),
-        battery,
+        battery_span,
+        Span::raw(" | Mouse:"), mouse_status,
         Span::raw(" | REC:"), record_status,
         Span::raw(" | Watch:"), w_status,
         Span::raw(" Open:"), o_status,
@@ -675,7 +701,8 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
                 Line::from(vec![Span::styled(" [r/Enter] ", Style::default().fg(Color::Cyan)), Span::raw("Build/Launch"), Span::styled("   [v] ", Style::default().fg(Color::Cyan)), Span::raw("Record Video"), Span::styled("      [s] ", Style::default().fg(Color::Cyan)), Span::raw("Screenshot")]),
                 Line::from(vec![Span::styled(" [u]       ", Style::default().fg(Color::Cyan)), Span::raw("Deep Link   "), Span::styled("   [b] ", Style::default().fg(Color::Cyan)), Span::raw("Toggle Bounds"), Span::styled("     [x] ", Style::default().fg(Color::Cyan)), Span::raw("Clear Data")]),
                 Line::from(vec![Span::styled(" [c]       ", Style::default().fg(Color::Cyan)), Span::raw("Clear Logs  "), Span::styled("   [e] ", Style::default().fg(Color::Cyan)), Span::raw("Export Logs  "), Span::styled("     [i] ", Style::default().fg(Color::Cyan)), Span::raw("Settings")]),
-                Line::from(vec![Span::styled(" [/]       ", Style::default().fg(Color::Cyan)), Span::raw("Search      "), Span::styled("   [y] ", Style::default().fg(Color::Cyan)), Span::raw("Yank Top Line"), Span::styled("    [q] ", Style::default().fg(Color::Cyan)), Span::raw("Quit")]),
+                Line::from(vec![Span::styled(" [/]       ", Style::default().fg(Color::Cyan)), Span::raw("Search      "), Span::styled("   [m] ", Style::default().fg(Color::Cyan)), Span::raw("Mouse Toggle "), Span::styled("     [A] ", Style::default().fg(Color::Cyan)), Span::raw("Yank All Logs")]),
+                Line::from(vec![Span::styled(" [y]       ", Style::default().fg(Color::Cyan)), Span::raw("Yank Line   "), Span::styled("   [C] ", Style::default().fg(Color::Cyan)), Span::raw("Yank Crash   "), Span::styled("     [q] ", Style::default().fg(Color::Cyan)), Span::raw("Quit")]),
                 Line::from(vec![Span::raw("")]),
                 Line::from(vec![Span::styled(" Log Levels: ", Style::default().add_modifier(Modifier::BOLD)), Span::raw("Alt + [1]Verbose [2]Debug [3]Info [4]Warn [5]Error")]),
                 Line::from(vec![Span::styled(" Scrolling:  ", Style::default().add_modifier(Modifier::BOLD)), Span::raw("Mouse Wheel, Up/Down, PageUp/Down, [G] Follow Bottom")]),
@@ -722,16 +749,17 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
 
     // 4. FOOTER (Row 4)
     let scroll_status = if app.state.autoscroll { "FOLLOW".cyan() } else { format!("PAUSED (Line {})", app.state.log_scroll).yellow() };
+    let mouse_mode = if app.state.mouse_captured { "APP".cyan() } else { "NATIVE".yellow() };
     let footer = Line::from(vec![
-        Span::raw(" [Tab] Switch Views | [1-4] Jump | "),
-        scroll_status,
+        Span::raw(" [Tab] Views | [m] Mouse:"), mouse_mode,
+        Span::raw(" | "), scroll_status,
         Span::raw(" | [h] Advanced Help").dark_gray(),
     ]);
     f.render_widget(Paragraph::new(footer), chunks[chunks.len() - 1]);
 
     // Modal Overlays
     if app.state.mode == AppMode::Help || app.state.mode == AppMode::Welcome {
-        let area = centered_rect(70, 70, f.area());
+        let area = centered_rect(70, 75, f.area());
         f.render_widget(Clear, area);
         let title = if app.state.mode == AppMode::Welcome { " Welcome to DeckDriod! " } else { " Advanced Help " };
         let mut help_popup_text = vec![
@@ -749,10 +777,14 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
             Line::from(vec![Span::styled(" Alt + 1-5 ", Style::default().fg(Color::Cyan)), Span::raw(": Set Min Log Level")]),
             Line::from(vec![Span::styled(" /         ", Style::default().fg(Color::Cyan)), Span::raw(": Search Logs")]),
             Line::from(vec![Span::styled(" k / j     ", Style::default().fg(Color::Cyan)), Span::raw(": Scroll Up/Down")]),
+            Line::from(vec![Span::styled(" m         ", Style::default().fg(Color::Cyan)), Span::raw(": Toggle Mouse (Capture vs Native Selection)")]),
             Line::from(vec![Span::styled(" y         ", Style::default().fg(Color::Cyan)), Span::raw(": Yank (Copy) top line")]),
+            Line::from(vec![Span::styled(" A         ", Style::default().fg(Color::Cyan)), Span::raw(": Yank (Copy) ALL visible logs")]),
             Line::from(vec![Span::styled(" C         ", Style::default().fg(Color::Cyan)), Span::raw(": Yank (Copy) last Crash Trace")]),
             Line::from(vec![Span::styled(" e         ", Style::default().fg(Color::Cyan)), Span::raw(": Export Logs")]),
 
+            Line::from(vec![Span::raw("")]),
+            Line::from(vec![Span::styled(" Tip: ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)), Span::raw("Hold Option (Mac) or Shift (Linux) for native selection while in APP mouse mode.")]),
             Line::from(vec![Span::raw("")]),
             Line::from(vec![Span::styled(" Esc / h   ", Style::default().fg(Color::Cyan)), Span::raw(": Close Menu")]),
             Line::from(vec![Span::styled(" q         ", Style::default().fg(Color::Cyan)), Span::raw(": Quit")]),
