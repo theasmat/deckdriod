@@ -3,7 +3,16 @@ set -e
 
 REPO="theasmat/deckdriod"
 BIN_NAME="deckdriod"
-INSTALL_DIR="/usr/local/bin"
+
+# Detect active installation path
+EXISTING_PATH=$(which $BIN_NAME || true)
+if [[ -n "$EXISTING_PATH" ]]; then
+    INSTALL_DIR=$(dirname "$EXISTING_PATH")
+    echo "Detected existing installation at $EXISTING_PATH. Updating in $INSTALL_DIR..."
+else
+    INSTALL_DIR="/usr/local/bin"
+    echo "No existing installation found. Defaulting to $INSTALL_DIR..."
+fi
 
 # Detect OS and Architecture
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
@@ -43,8 +52,13 @@ if [[ ! -f "$TMP_DIR/$BIN_NAME" ]]; then
     exit 1
 fi
 
-sudo mv "$TMP_DIR/$BIN_NAME" "$INSTALL_DIR/"
-chmod +x "$INSTALL_DIR/$BIN_NAME"
+# Try to move without sudo first, fallback to sudo if needed
+if mv "$TMP_DIR/$BIN_NAME" "$INSTALL_DIR/" 2>/dev/null; then
+    chmod +x "$INSTALL_DIR/$BIN_NAME"
+else
+    sudo mv "$TMP_DIR/$BIN_NAME" "$INSTALL_DIR/"
+    sudo chmod +x "$INSTALL_DIR/$BIN_NAME"
+fi
 
 echo "Successfully installed $BIN_NAME to $INSTALL_DIR"
-$BIN_NAME --version || true
+$BIN_NAME -v || true
