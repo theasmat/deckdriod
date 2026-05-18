@@ -20,62 +20,46 @@ pub async fn start_stats_polling(
     loop {
         interval.tick().await;
         
-        let stats = get_stats(&serial, &app_id).await.unwrap_or(None);
-        let battery = get_battery(&serial).await.unwrap_or(None);
-        
-        if let Some(mut s) = stats {
-            s.battery = battery;
-            let _ = tx.send(s);
-        } else if let Some(b) = battery {
-             let _ = tx.send(StatsUpdate { cpu: 0.0, mem: 0.0, battery: Some(b) });
+        let update = get_combined_stats(&serial, &app_id).await.unwrap_or(None);
+        if let Some(stats) = update {
+            let _ = tx.send(stats);
         }
     }
 }
 
-async fn get_battery(serial: &str) -> Result<Option<u8>> {
+async fn get_combined_stats(serial: &str, app_id: &str) -> Result<Option<StatsUpdate>> {
+    // Run top and battery in a single shell command to reduce latency
+    let cmd = format!("top -n 1 -b -q | grep {}; dumpsys battery | grep level", app_id);
     let output = Command::new("adb")
-        .args(["-s", serial, "shell", "dumpsys", "battery"])
+        .args(["-s", serial, "shell", &cmd])
         .stdin(Stdio::null())
         .output()
         .await?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    for line in stdout.lines() {
-        if line.contains("level:") {
-            if let Some(lvl_str) = line.split(':').last() {
-                if let Ok(lvl) = lvl_str.trim().parse::<u8>() {
-                    return Ok(Some(lvl));
-                }
-            }
-        }
-    }
-    Ok(None)
-}
+    let mut cpu = 0.0;
+    let mut mem = 0.0;
+    let mut battery = None;
+    let mut found_app = false;
 
-async fn get_stats(serial: &str, app_id: &str) -> Result<Option<StatsUpdate>> {
-    // Get CPU and Mem from top
-    let output = Command::new("adb")
-        .args(["-s", serial, "shell", "top", "-n", "1", "-b", "-q"])
-        .stdin(Stdio::null())
-        .output()
-        .await?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
     for line in stdout.lines() {
-        if line.contains(app_id) {
+        if line.contains(app_id) && !found_app {
             let parts: Vec<&str> = line.split_whitespace().collect();
-            // top columns: PID USER PR NI VIRT RES SHR S %CPU %MEM TIME+ ARGS
-            // Usually %CPU is at index 8 and %MEM at index 9 for busybox top, 
-            // but Android top might differ.
-            // In Android 10+ top:
-            // PID USER PR NI VIRT RES SHR S [%CPU] [%MEM] TIME+ ARGS
             if parts.len() >= 10 {
-                let cpu: f64 = parts[8].parse().unwrap_or(0.0);
-                let mem: f64 = parts[9].parse().unwrap_or(0.0);
-                return Ok(Some(StatsUpdate { cpu, mem, battery: None }));
+                cpu = parts[8].parse().unwrap_or(0.0);
+                mem = parts[9].parse().unwrap_or(0.0);
+                found_app = true;
+            }
+        } else if line.contains("level:") {
+            if let Some(lvl_str) = line.split(':').last() {
+                battery = lvl_str.trim().parse::<u8>().ok();
             }
         }
     }
     
-    Ok(None)
+    if found_app || battery.is_some() {
+        Ok(Some(StatsUpdate { cpu, mem, battery }))
+    } else {
+        Ok(None)
+    }
 }

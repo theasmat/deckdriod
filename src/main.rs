@@ -153,10 +153,10 @@ async fn main() -> Result<()> {
                 println!("Updating deckdriod...");
                 let status = std::process::Command::new("sh")
                     .arg("-c")
-                    .arg("curl -sSf https://raw.githubusercontent.com/theasmat/deckdriod/master/install.sh | sh")
+                    .arg("set -o pipefail; curl -sSf https://raw.githubusercontent.com/theasmat/deckdriod/master/install.sh | sh")
                     .status()?;
                 if status.success() { println!("\n✅ Update successful!"); } 
-                else { eprintln!("\n❌ Update failed."); std::process::exit(1); }
+                else { eprintln!("\n❌ Update failed. Check your internet connection."); std::process::exit(1); }
                 return Ok(());
             }
             _ => {}
@@ -221,9 +221,13 @@ async fn main() -> Result<()> {
 
     let mut interval = tokio::time::interval(std::time::Duration::from_millis(100));
     let recorder = Arc::new(Mutex::new(commands::Recorder::new()));
+    let mut last_draw = std::time::Instant::now();
 
     loop {
-        terminal.draw(|f| ui(f, &mut app))?;
+        if last_draw.elapsed() >= std::time::Duration::from_millis(33) {
+            terminal.draw(|f| ui(f, &mut app))?;
+            last_draw = std::time::Instant::now();
+        }
 
         tokio::select! {
             _ = interval.tick() => {
@@ -292,10 +296,8 @@ async fn main() -> Result<()> {
                                 app.state.autoscroll = false;
                                 let current = app.log_state.selected().unwrap_or(0);
                                 let current_cache_len = match app.state.current_tab {
-                                    Tab::Dashboard => app.cache_all.len(),
-                                    Tab::App => app.cache_app.len(),
-                                    Tab::Build => app.cache_build.len(),
-                                    Tab::Errors => app.cache_err.len(),
+                                    Tab::Dashboard => app.cache_all.len(), Tab::App => app.cache_app.len(),
+                                    Tab::Build => app.cache_build.len(), Tab::Errors => app.cache_err.len(),
                                 };
                                 let max = current_cache_len.saturating_sub(1);
                                 if current < max { app.log_state.select(Some(current + 1)); }
@@ -380,10 +382,8 @@ async fn main() -> Result<()> {
                                         app.state.autoscroll = false;
                                         let current = app.log_state.selected().unwrap_or(0);
                                         let current_cache_len = match app.state.current_tab {
-                                            Tab::Dashboard => app.cache_all.len(),
-                                            Tab::App => app.cache_app.len(),
-                                            Tab::Build => app.cache_build.len(),
-                                            Tab::Errors => app.cache_err.len(),
+                                            Tab::Dashboard => app.cache_all.len(), Tab::App => app.cache_app.len(),
+                                            Tab::Build => app.cache_build.len(), Tab::Errors => app.cache_err.len(),
                                         };
                                         let max = current_cache_len.saturating_sub(1);
                                         if current < max { app.log_state.select(Some(current + 1)); }
@@ -397,10 +397,8 @@ async fn main() -> Result<()> {
                                         app.state.autoscroll = false;
                                         let current = app.log_state.selected().unwrap_or(0);
                                         let current_cache_len = match app.state.current_tab {
-                                            Tab::Dashboard => app.cache_all.len(),
-                                            Tab::App => app.cache_app.len(),
-                                            Tab::Build => app.cache_build.len(),
-                                            Tab::Errors => app.cache_err.len(),
+                                            Tab::Dashboard => app.cache_all.len(), Tab::App => app.cache_app.len(),
+                                            Tab::Build => app.cache_build.len(), Tab::Errors => app.cache_err.len(),
                                         };
                                         let max = current_cache_len.saturating_sub(1);
                                         app.log_state.select(Some((current + 20).min(max)));
@@ -410,10 +408,8 @@ async fn main() -> Result<()> {
                                     (KeyCode::Char('y'), _) => {
                                         if let Some(idx) = app.log_state.selected() {
                                             let current_cache = match app.state.current_tab {
-                                                Tab::Dashboard => &app.cache_all,
-                                                Tab::App => &app.cache_app,
-                                                Tab::Build => &app.cache_build,
-                                                Tab::Errors => &app.cache_err,
+                                                Tab::Dashboard => &app.cache_all, Tab::App => &app.cache_app,
+                                                Tab::Build => &app.cache_build, Tab::Errors => &app.cache_err,
                                             };
                                             if let Some(line) = current_cache.get(idx) {
                                                 if let Ok(mut clipboard) = arboard::Clipboard::new() {
@@ -425,19 +421,15 @@ async fn main() -> Result<()> {
                                     }
                                     (KeyCode::Tab, _) => {
                                         app.state.current_tab = match app.state.current_tab {
-                                            Tab::Dashboard => Tab::App,
-                                            Tab::App => Tab::Build,
-                                            Tab::Build => Tab::Errors,
-                                            Tab::Errors => Tab::Dashboard,
+                                            Tab::Dashboard => Tab::App, Tab::App => Tab::Build,
+                                            Tab::Build => Tab::Errors, Tab::Errors => Tab::Dashboard,
                                         };
                                         app.refresh_filter_cache();
                                     }
                                     (KeyCode::BackTab, _) => {
                                         app.state.current_tab = match app.state.current_tab {
-                                            Tab::Dashboard => Tab::Errors,
-                                            Tab::Errors => Tab::Build,
-                                            Tab::Build => Tab::App,
-                                            Tab::App => Tab::Dashboard,
+                                            Tab::Dashboard => Tab::Errors, Tab::Errors => Tab::Build,
+                                            Tab::Build => Tab::App, Tab::App => Tab::Dashboard,
                                         };
                                         app.refresh_filter_cache();
                                     }
@@ -574,15 +566,12 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
         .constraints(main_constraints)
         .split(f.area());
 
-    // Tabs
     let tab_titles = vec![" [1] Dashboard ", " [2] App ", " [3] Build ", " [4] Errors "];
     let tabs = Tabs::new(tab_titles)
         .block(Block::default().borders(Borders::ALL).title(" Views "))
         .select(match app.state.current_tab {
-            Tab::Dashboard => 0,
-            Tab::App => 1,
-            Tab::Build => 2,
-            Tab::Errors => 3,
+            Tab::Dashboard => 0, Tab::App => 1,
+            Tab::Build => 2, Tab::Errors => 3,
         })
         .style(Style::default().fg(Color::Cyan))
         .highlight_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
@@ -659,10 +648,8 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
     }
 
     let logs_to_render = match app.state.current_tab {
-        Tab::Dashboard => &app.cache_all,
-        Tab::App => &app.cache_app,
-        Tab::Build => &app.cache_build,
-        Tab::Errors => &app.cache_err,
+        Tab::Dashboard => &app.cache_all, Tab::App => &app.cache_app,
+        Tab::Build => &app.cache_build, Tab::Errors => &app.cache_err,
     };
 
     let log_items: Vec<ListItem> = logs_to_render.iter().map(|l| {
@@ -671,16 +658,14 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
     }).collect();
 
     let log_title = match app.state.current_tab {
-        Tab::Dashboard => " All Logs ",
-        Tab::App => " App Logs (Logcat) ",
-        Tab::Build => " Build Logs (Gradle) ",
-        Tab::Errors => " Errors & Crashes ",
+        Tab::Dashboard => " All Logs ", Tab::App => " App Logs (Logcat) ",
+        Tab::Build => " Build Logs (Gradle) ", Tab::Errors => " Errors & Crashes ",
     };
 
     f.render_stateful_widget(List::new(log_items).block(Block::default().borders(Borders::ALL).title(log_title)).highlight_style(Style::default().add_modifier(Modifier::BOLD).bg(Color::DarkGray)), chunks[log_chunk_idx], &mut app.log_state);
 
     let help_chunk_idx = chunks.len() - 1;
-    f.render_widget(Paragraph::new(vec![Line::from(vec!["[Tab] cycle views [1-4] switch view [Alt+1-5] log level [h] help [q] quit".cyan().italic()])]).block(Block::default().borders(Borders::ALL).title(" Help ")), chunks[help_chunk_idx]);
+    f.render_widget(Paragraph::new(vec![Line::from(vec!["[Tab] views [1-4] switch [Alt+1-5] lvl [r] build [c] clear [h] help [q] quit".cyan().italic()])]).block(Block::default().borders(Borders::ALL).title(" Help ")), chunks[help_chunk_idx]);
 
     if app.state.mode == AppMode::Help || app.state.mode == AppMode::Welcome {
         let area = centered_rect(70, 70, f.area());
