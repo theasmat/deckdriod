@@ -8,6 +8,7 @@ pub struct Config {
     pub activity: String,
     pub watch_latency: f64,
     pub rebuild_gap: f64,
+    pub log_tag: String,
     pub custom_commands: HashMap<char, String>,
 }
 
@@ -20,6 +21,7 @@ impl Config {
         map.insert("APP_ID".to_string(), "com.mfc.manager.kotlin.dev".to_string());
         map.insert("WATCH_LATENCY".to_string(), "1.0".to_string());
         map.insert("REBUILD_GAP".to_string(), "2.0".to_string());
+        map.insert("LOG_TAG".to_string(), "".to_string());
 
         // Load .deckdriodconfig if it exists
         if Path::new(".deckdriodconfig").exists() {
@@ -53,19 +55,22 @@ impl Config {
             .and_then(|s| s.parse().ok())
             .unwrap_or(2.0);
 
+        let log_tag = map.get("LOG_TAG").cloned().unwrap_or_default();
+
         Config {
             app_id,
             activity,
             watch_latency,
             rebuild_gap,
+            log_tag,
             custom_commands,
         }
     }
 
     pub fn save(&self) -> std::io::Result<()> {
         let mut content = format!(
-            "APP_ID={}\nACTIVITY={}\nWATCH_LATENCY={:.1}\nREBUILD_GAP={:.1}\n",
-            self.app_id, self.activity, self.watch_latency, self.rebuild_gap
+            "APP_ID={}\nACTIVITY={}\nWATCH_LATENCY={:.1}\nREBUILD_GAP={:.1}\nLOG_TAG={}\n",
+            self.app_id, self.activity, self.watch_latency, self.rebuild_gap, self.log_tag
         );
 
         for (key, val) in &self.custom_commands {

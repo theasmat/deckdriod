@@ -59,34 +59,72 @@ impl App {
             self.logs.pop_front();
         }
         
-        if log.contains("FATAL EXCEPTION") || log.contains("AndroidRuntime:E") {
-            self.state.last_crash = Some(log.clone());
+        let l = log.trim().to_string();
+
+        // 1. Crash Capture
+        if l.contains("FATAL EXCEPTION") || l.contains("AndroidRuntime:E") {
+            self.state.last_crash = Some(l.clone());
+            self.state.last_crash_trace = Some(l.clone());
+            self.state.is_capturing_crash = true;
+        } else if self.state.is_capturing_crash {
+            if l.starts_with("at ") || l.starts_with("\tat ") || l.contains("Caused by:") {
+                if let Some(ref mut trace) = self.state.last_crash_trace {
+                    trace.push('\n');
+                    trace.push_str(&l);
+                }
+            } else {
+                // End of crash trace
+                self.state.is_capturing_crash = false;
+                if let Some(ref trace) = self.state.last_crash_trace {
+                    let _ = std::fs::write("crash_report.txt", trace);
+                }
+            }
         }
 
-        let l = log.clone();
-        self.logs.push_back(log);
-        
-        if self.matches_filter(&l) {
-            self.cache_all.push(l.clone());
-            if self.cache_all.len() > 5000 { self.cache_all.remove(0); }
-            
-            if l.contains("[build]") || l.contains("[build-err]") {
-                self.cache_build.push(l.clone());
-                if self.cache_build.len() > 5000 { self.cache_build.remove(0); }
-            } else {
-                self.cache_app.push(l.clone());
-                if self.cache_app.len() > 5000 { self.cache_app.remove(0); }
+        // 2. Structured App Logging (Expo-style)
+        let mut logs_to_add = Vec::new();
+        if l.contains("[DeckDriod]") {
+            if let Some(json_start) = l.find('{') {
+                let json_part = &l[json_start..];
+                if let Ok(value) = serde_json::from_str::<serde_json::Value>(json_part) {
+                    if let Ok(pretty) = serde_json::to_string_pretty(&value) {
+                        logs_to_add.push("--- App State ---".to_string());
+                        for line in pretty.lines() {
+                            logs_to_add.push(format!("  {}", line));
+                        }
+                        logs_to_add.push("-----------------".to_string());
+                    }
+                }
             }
+        }
 
-            if l.contains(" E/") || l.contains("[err]") || l.contains("[build-err]") || l.contains("FATAL") {
-                self.cache_err.push(l.clone());
-                if self.cache_err.len() > 5000 { self.cache_err.remove(0); }
-            }
+        if logs_to_add.is_empty() {
+            logs_to_add.push(l);
+        }
 
-            if self.state.autoscroll {
-                let current_cache_len = self.current_log_len();
-                self.state.log_scroll = current_cache_len.saturating_sub(1) as u16;
+        for entry in logs_to_add {
+            self.logs.push_back(entry.clone());
+            if self.matches_filter(&entry) {
+                self.cache_all.push(entry.clone());
+                if self.cache_all.len() > 5000 { self.cache_all.remove(0); }
+                
+                if entry.contains("[build]") || entry.contains("[build-err]") {
+                    self.cache_build.push(entry.clone());
+                    if self.cache_build.len() > 5000 { self.cache_build.remove(0); }
+                } else {
+                    self.cache_app.push(entry.clone());
+                    if self.cache_app.len() > 5000 { self.cache_app.remove(0); }
+                }
+
+                if entry.contains(" E/") || entry.contains("[err]") || entry.contains("[build-err]") || entry.contains("FATAL") {
+                    self.cache_err.push(entry.clone());
+                    if self.cache_err.len() > 5000 { self.cache_err.remove(0); }
+                }
             }
+        }
+
+        if self.state.autoscroll {
+            self.state.log_scroll = self.current_log_len().saturating_sub(1) as u16;
         }
     }
 
@@ -100,6 +138,13 @@ impl App {
     }
 
     fn matches_filter(&self, log: &str) -> bool {
+        // Tag filter
+        if !self.config.log_tag.is_empty() {
+            if !log.contains(&self.config.log_tag) {
+                return false;
+            }
+        }
+
         if let Some(level) = LogLevel::from_str(log) {
             if (level as u8) < (self.state.min_log_level as u8) {
                 return false;
@@ -396,6 +441,16 @@ async fn main() -> Result<()> {
                                             }
                                         }
                                     }
+                                    (KeyCode::Char('C'), _) => {
+                                        if let Some(ref trace) = app.state.last_crash_trace {
+                                            if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                                                let _ = clipboard.set_text(trace.clone());
+                                                let _ = tx_log.send("[ok] last crash trace yanked".to_string());
+                                            }
+                                        } else {
+                                            let _ = tx_log.send("[warn] no crash trace available to yank".to_string());
+                                        }
+                                    }
 
                                     (KeyCode::Tab, _) => {
                                         app.state.current_tab = match app.state.current_tab {
@@ -463,6 +518,7 @@ async fn main() -> Result<()> {
                                          1 => app.config.activity = val,
                                          2 => if let Ok(v) = val.parse() { app.config.watch_latency = v; },
                                          3 => if let Ok(v) = val.parse() { app.config.rebuild_gap = v; },
+                                         4 => { app.config.log_tag = val; app.refresh_filter_cache(); },
                                          _ => {}
                                      }
                                      let _ = app.config.save();
@@ -481,7 +537,7 @@ async fn main() -> Result<()> {
                                 match key.code {
                                     KeyCode::Esc | KeyCode::Char('q') => app.state.mode = AppMode::Normal,
                                     KeyCode::Up | KeyCode::Char('k') => app.state.settings_index = app.state.settings_index.saturating_sub(1),
-                                    KeyCode::Down | KeyCode::Char('j') => app.state.settings_index = (app.state.settings_index + 1).min(3),
+                                    KeyCode::Down | KeyCode::Char('j') => app.state.settings_index = (app.state.settings_index + 1).min(4),
                                     KeyCode::Enter => {
                                         app.state.mode = AppMode::Input; app.state.input_buffer.clear();
                                         match app.state.settings_index {
@@ -489,6 +545,7 @@ async fn main() -> Result<()> {
                                             1 => app.state.input_buffer = app.config.activity.clone(),
                                             2 => app.state.input_buffer = format!("{:.1}", app.config.watch_latency),
                                             3 => app.state.input_buffer = format!("{:.1}", app.config.rebuild_gap),
+                                            4 => app.state.input_buffer = app.config.log_tag.clone(),
                                             _ => {}
                                         }
                                     }
@@ -640,11 +697,17 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
             };
 
             let log_lines: Vec<Line> = logs_to_render.iter().map(|l| {
-                let style = if l.contains("[err]") || l.contains("[build-err]") || l.contains(" E/") { Style::default().fg(Color::Red) } 
+                let mut style = if l.contains("[err]") || l.contains("[build-err]") || l.contains(" E/") { Style::default().fg(Color::Red) } 
                 else if l.contains("[ok]") { Style::default().fg(Color::Green) } 
                 else if l.contains("[build]") || l.contains(" W/") { Style::default().fg(Color::Yellow) } 
                 else if l.contains(" I/") { Style::default().fg(Color::Cyan) } 
                 else { Style::default() };
+
+                // Smart Stack Formatting: Dim boilerplate stack trace lines
+                if l.starts_with("at ") || l.starts_with("\tat ") || l.contains("...") {
+                    style = Style::default().fg(Color::DarkGray);
+                }
+
                 Line::from(Span::styled(l, style))
             }).collect();
 
@@ -687,7 +750,9 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
             Line::from(vec![Span::styled(" /         ", Style::default().fg(Color::Cyan)), Span::raw(": Search Logs")]),
             Line::from(vec![Span::styled(" k / j     ", Style::default().fg(Color::Cyan)), Span::raw(": Scroll Up/Down")]),
             Line::from(vec![Span::styled(" y         ", Style::default().fg(Color::Cyan)), Span::raw(": Yank (Copy) top line")]),
+            Line::from(vec![Span::styled(" C         ", Style::default().fg(Color::Cyan)), Span::raw(": Yank (Copy) last Crash Trace")]),
             Line::from(vec![Span::styled(" e         ", Style::default().fg(Color::Cyan)), Span::raw(": Export Logs")]),
+
             Line::from(vec![Span::raw("")]),
             Line::from(vec![Span::styled(" Esc / h   ", Style::default().fg(Color::Cyan)), Span::raw(": Close Menu")]),
             Line::from(vec![Span::styled(" q         ", Style::default().fg(Color::Cyan)), Span::raw(": Quit")]),
@@ -700,11 +765,17 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
     }
 
     if app.state.mode == AppMode::Settings || (app.state.mode == AppMode::Input && app.state.settings_index < 10) {
-        let area = centered_rect(60, 40, f.area());
+        let area = centered_rect(60, 50, f.area());
         f.render_widget(Clear, area);
         let watch_latency_str = format!("{:.1}", app.config.watch_latency);
         let rebuild_gap_str = format!("{:.1}", app.config.rebuild_gap);
-        let settings = vec![("App ID", &app.config.app_id), ("Main Activity", &app.config.activity), ("Watch Latency (s)", &watch_latency_str), ("Build Gap (s)", &rebuild_gap_str)];
+        let settings = vec![
+            ("App ID", &app.config.app_id),
+            ("Main Activity", &app.config.activity),
+            ("Watch Latency (s)", &watch_latency_str),
+            ("Build Gap (s)", &rebuild_gap_str),
+            ("Log Tag Filter", &app.config.log_tag),
+        ];
         let items: Vec<ListItem> = settings.iter().enumerate().map(|(i, (label, val))| {
             let mut style = Style::default();
             if i == app.state.settings_index { style = style.fg(Color::Yellow).add_modifier(Modifier::BOLD); }

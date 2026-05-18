@@ -329,7 +329,7 @@ dependencies = [
 
 [[package]]
 name = "deckdriod"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "anyhow",
  "arboard",
@@ -340,6 +340,7 @@ dependencies = [
  "notify",
  "notify-debouncer-mini",
  "ratatui",
+ "serde_json",
  "tokio",
  "tokio-stream",
 ]
