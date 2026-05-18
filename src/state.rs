@@ -8,6 +8,8 @@ pub enum AppMode {
     Search,
     DeepLink,
     Help,
+    Welcome,
+    Settings,
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -56,6 +58,7 @@ pub struct AppState {
     pub is_recording: bool,
     pub show_layout_bounds: bool,
     pub last_rebuild_at: Option<std::time::Instant>,
+    pub settings_index: usize,
 }
 
 impl Default for AppState {
@@ -77,6 +80,7 @@ impl Default for AppState {
             is_recording: false,
             show_layout_bounds: false,
             last_rebuild_at: None,
+            settings_index: 0,
         }
     }
 }

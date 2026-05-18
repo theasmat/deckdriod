@@ -60,4 +60,17 @@ impl Config {
             custom_commands,
         }
     }
+
+    pub fn save(&self) -> std::io::Result<()> {
+        let mut content = format!(
+            "APP_ID={}\nACTIVITY={}\nWATCH_LATENCY={:.1}\nREBUILD_GAP={:.1}\n",
+            self.app_id, self.activity, self.watch_latency, self.rebuild_gap
+        );
+
+        for (key, val) in &self.custom_commands {
+            content.push_str(&format!("DECKDRIOD_CMD_{}={}\n", key.to_uppercase(), val));
+        }
+
+        std::fs::write(".deckdriodconfig", content)
+    }
 }

@@ -117,6 +117,11 @@ async fn main() -> Result<()> {
     let config = Config::load();
     let mut state = AppState::default();
 
+    // Check for first run in this directory
+    if !std::path::Path::new(".deckdriodconfig").exists() {
+        state.mode = AppMode::Welcome;
+    }
+
     // Device selection (before entering TUI mode for simplicity)
     let devices = commands::get_devices().await?;
     if devices.is_empty() {
@@ -270,6 +275,10 @@ async fn main() -> Result<()> {
                                 (KeyCode::Char('h'), _) => {
                                     app.state.mode = AppMode::Help;
                                 }
+                                (KeyCode::Char('i'), _) => {
+                                    app.state.mode = AppMode::Settings;
+                                    app.state.settings_index = 0;
+                                }
                                 (KeyCode::Char('w'), _) => { app.state.auto_rebuild = !app.state.auto_rebuild; }
                                 (KeyCode::Char('o'), _) => { app.state.auto_open = !app.state.auto_open; }
                                 (KeyCode::Char('l'), _) => {
@@ -414,11 +423,51 @@ async fn main() -> Result<()> {
                         }
                         AppMode::Input => {
                              if key.code == KeyCode::Esc { app.state.mode = AppMode::Normal; }
+                             if key.code == KeyCode::Enter {
+                                 let val = app.state.input_buffer.clone();
+                                 let mut success = true;
+                                 match app.state.settings_index {
+                                     0 => app.config.app_id = val,
+                                     1 => app.config.activity = val,
+                                     2 => if let Ok(v) = val.parse() { app.config.watch_latency = v; } else { success = false; },
+                                     3 => if let Ok(v) = val.parse() { app.config.rebuild_gap = v; } else { success = false; },
+                                     _ => {}
+                                 }
+                                 if success {
+                                     let _ = app.config.save();
+                                     let _ = tx_log.send("[ok] settings updated and saved".to_string());
+                                 }
+                                 app.state.mode = AppMode::Settings;
+                             }
+                             if let KeyCode::Char(c) = key.code { app.state.input_buffer.push(c); }
+                             if key.code == KeyCode::Backspace { app.state.input_buffer.pop(); }
                         }
-                        AppMode::Help => {
-                             if key.code == KeyCode::Esc || key.code == KeyCode::Char('h') || key.code == KeyCode::Char('q') { 
+                        AppMode::Help | AppMode::Welcome => {
+                             if key.code == KeyCode::Esc || key.code == KeyCode::Char('h') || key.code == KeyCode::Char('q') || key.code == KeyCode::Enter { 
+                                 if app.state.mode == AppMode::Welcome {
+                                     let _ = app.config.save(); // Create initial config file
+                                 }
                                  app.state.mode = AppMode::Normal; 
                              }
+                        }
+                        AppMode::Settings => {
+                            match key.code {
+                                KeyCode::Esc | KeyCode::Char('q') => app.state.mode = AppMode::Normal,
+                                KeyCode::Up | KeyCode::Char('k') => app.state.settings_index = app.state.settings_index.saturating_sub(1),
+                                KeyCode::Down | KeyCode::Char('j') => app.state.settings_index = (app.state.settings_index + 1).min(3),
+                                KeyCode::Enter => {
+                                    app.state.mode = AppMode::Input;
+                                    app.state.input_buffer.clear();
+                                    match app.state.settings_index {
+                                        0 => app.state.input_buffer = app.config.app_id.clone(),
+                                        1 => app.state.input_buffer = app.config.activity.clone(),
+                                        2 => app.state.input_buffer = format!("{:.1}", app.config.watch_latency),
+                                        3 => app.state.input_buffer = format!("{:.1}", app.config.rebuild_gap),
+                                        _ => {}
+                                    }
+                                }
+                                _ => {}
+                            }
                         }
                     }
                 }
@@ -626,10 +675,11 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
     f.render_widget(help, chunks[help_chunk_idx]);
 
     // Help Popup
-    if app.state.mode == AppMode::Help {
-        let area = centered_rect(60, 60, f.area());
-        f.render_widget(Clear, area); // Clear the area before rendering the popup
-        let help_popup_text = vec![
+    if app.state.mode == AppMode::Help || app.state.mode == AppMode::Welcome {
+        let area = centered_rect(70, 70, f.area());
+        f.render_widget(Clear, area);
+        let title = if app.state.mode == AppMode::Welcome { " Welcome to DeckDriod! " } else { " Advanced Help " };
+        let mut help_popup_text = vec![
             Line::from(vec![Span::styled("--- CLI Commands ---", Style::default().add_modifier(Modifier::BOLD))]),
             Line::from(vec![Span::styled(" deckdriod -v      ", Style::default().fg(Color::Cyan)), Span::raw(": Show version info")]),
             Line::from(vec![Span::styled(" deckdriod update  ", Style::default().fg(Color::Cyan)), Span::raw(": Update to latest version")]),
@@ -637,6 +687,7 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
             Line::from(vec![Span::styled("--- Controls ---", Style::default().add_modifier(Modifier::BOLD))]),
             Line::from(vec![Span::styled(" r / Enter ", Style::default().fg(Color::Cyan)), Span::raw(": Build & Launch")]),
             Line::from(vec![Span::styled(" c         ", Style::default().fg(Color::Cyan)), Span::raw(": Clear Logs & Crash Alert")]),
+            Line::from(vec![Span::styled(" i         ", Style::default().fg(Color::Cyan)), Span::raw(": Open Settings Menu")]),
             Line::from(vec![Span::styled(" v         ", Style::default().fg(Color::Cyan)), Span::raw(": Start/Stop Screen Recording")]),
             Line::from(vec![Span::styled(" s         ", Style::default().fg(Color::Cyan)), Span::raw(": Take Screenshot")]),
             Line::from(vec![Span::styled(" u         ", Style::default().fg(Color::Cyan)), Span::raw(": Open Deep Link")]),
@@ -651,12 +702,57 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
             Line::from(vec![Span::styled(" d         ", Style::default().fg(Color::Cyan)), Span::raw(": Android Dev Menu")]),
             Line::from(vec![Span::styled(" x         ", Style::default().fg(Color::Cyan)), Span::raw(": Clear App Data")]),
             Line::from(vec![Span::raw("")]),
-            Line::from(vec![Span::styled(" Esc / h   ", Style::default().fg(Color::Cyan)), Span::raw(": Close Help")]),
+            Line::from(vec![Span::styled(" Esc / h   ", Style::default().fg(Color::Cyan)), Span::raw(": Close Menu")]),
             Line::from(vec![Span::styled(" q         ", Style::default().fg(Color::Cyan)), Span::raw(": Quit")]),
         ];
+
+        if app.state.mode == AppMode::Welcome {
+            help_popup_text.insert(0, Line::from(vec![Span::styled("First run detected! Here are your available commands:", Style::default().fg(Color::Yellow))]));
+            help_popup_text.insert(1, Line::from(vec![Span::raw("")]));
+        }
+
         let popup = Paragraph::new(help_popup_text)
-            .block(Block::default().borders(Borders::ALL).title(" Advanced Help ").border_style(Style::default().fg(Color::Cyan)))
+            .block(Block::default().borders(Borders::ALL).title(title).border_style(Style::default().fg(Color::Cyan)))
             .wrap(Wrap { trim: true });
         f.render_widget(popup, area);
+    }
+
+    // Settings Popup
+    if app.state.mode == AppMode::Settings || (app.state.mode == AppMode::Input && app.state.settings_index < 10) {
+        let area = centered_rect(60, 40, f.area());
+        f.render_widget(Clear, area);
+        
+        let watch_latency_str = format!("{:.1}", app.config.watch_latency);
+        let rebuild_gap_str = format!("{:.1}", app.config.rebuild_gap);
+
+        let settings = vec![
+            ("App ID", &app.config.app_id),
+            ("Main Activity", &app.config.activity),
+            ("Watch Latency (s)", &watch_latency_str),
+            ("Build Gap (s)", &rebuild_gap_str),
+        ];
+
+        let items: Vec<ListItem> = settings.iter().enumerate().map(|(i, (label, val))| {
+            let mut style = Style::default();
+            if i == app.state.settings_index {
+                style = style.fg(Color::Yellow).add_modifier(Modifier::BOLD);
+            }
+            ListItem::new(Line::from(vec![
+                Span::styled(format!("{:<20}: ", label), style),
+                Span::raw(*val),
+            ]))
+        }).collect();
+
+        let list = List::new(items)
+            .block(Block::default().borders(Borders::ALL).title(" Project Settings ").border_style(Style::default().fg(Color::Yellow)));
+        f.render_widget(list, area);
+        
+        if app.state.mode == AppMode::Input {
+            let input_area = centered_rect(50, 10, area);
+            f.render_widget(Clear, input_area);
+            let input = Paragraph::new(app.state.input_buffer.as_str())
+                .block(Block::default().borders(Borders::ALL).title(" Edit Value ").border_style(Style::default().fg(Color::Yellow)));
+            f.render_widget(input, input_area);
+        }
     }
 }
