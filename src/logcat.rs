@@ -13,7 +13,7 @@ impl LogcatManager {
         Self { child: None }
     }
 
-    pub fn start(
+    pub async fn start(
         &mut self, 
         serial: &str, 
         app_id: &str, 
@@ -21,9 +21,11 @@ impl LogcatManager {
     ) -> Result<()> {
         self.stop();
         
-        let _ = std::process::Command::new("adb")
+        let _ = Command::new("adb")
             .args(["-s", serial, "logcat", "-c"])
-            .status();
+            .stdin(Stdio::null())
+            .status()
+            .await;
 
         let mut child = Command::new("adb")
             .args([

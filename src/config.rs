@@ -2,6 +2,7 @@ use dotenvy;
 use std::collections::HashMap;
 use std::path::Path;
 
+#[derive(Clone)]
 pub struct Config {
     pub app_id: String,
     pub activity: String,

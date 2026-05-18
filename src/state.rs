@@ -32,7 +32,7 @@ impl LogLevel {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct SystemStats {
     pub cpu_usage: VecDeque<f64>,
     pub mem_usage: VecDeque<f64>,
@@ -41,6 +41,7 @@ pub struct SystemStats {
     pub battery_level: Option<u8>,
 }
 
+#[derive(Clone)]
 pub struct AppState {
     pub auto_rebuild: bool,
     pub auto_open: bool,
