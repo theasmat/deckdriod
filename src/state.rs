@@ -55,6 +55,7 @@ pub struct AppState {
     pub build_history: VecDeque<Duration>,
     pub is_recording: bool,
     pub show_layout_bounds: bool,
+    pub last_rebuild_at: Option<std::time::Instant>,
 }
 
 impl Default for AppState {
@@ -75,6 +76,7 @@ impl Default for AppState {
             build_history: VecDeque::with_capacity(5),
             is_recording: false,
             show_layout_bounds: false,
+            last_rebuild_at: None,
         }
     }
 }

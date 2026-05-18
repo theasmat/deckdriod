@@ -208,9 +208,21 @@ async fn main() -> Result<()> {
             }
             Some(_) = rx_watch.recv() => {
                 if app.state.auto_rebuild {
-                    let build_tx = tx_log.clone();
-                    let build_evt_tx = tx_build.clone();
-                    let _ = commands::build_and_launch(&app.config, &app.state, build_tx, build_evt_tx).await;
+                    let now = std::time::Instant::now();
+                    let should_build = match app.state.last_rebuild_at {
+                        Some(last) => now.duration_since(last).as_secs_f64() >= app.config.rebuild_gap,
+                        None => true,
+                    };
+
+                    if should_build {
+                        app.state.last_rebuild_at = Some(now);
+                        let build_tx = tx_log.clone();
+                        let build_evt_tx = tx_build.clone();
+                        let _ = commands::build_and_launch(&app.config, &app.state, build_tx, build_evt_tx).await;
+                    } else {
+                        let remaining = app.config.rebuild_gap - now.duration_since(app.state.last_rebuild_at.unwrap()).as_secs_f64();
+                        let _ = tx_log.send(format!("[info] change detected, waiting for build gap ({:.1}s remaining)", remaining));
+                    }
                 } else {
                     let _ = tx_log.send("[warn] change detected but auto-rebuild is OFF".to_string());
                 }
@@ -244,6 +256,7 @@ async fn main() -> Result<()> {
                             match (key.code, key.modifiers) {
                                 (KeyCode::Char('q'), _) | (KeyCode::Char('c'), KeyModifiers::CONTROL) => break,
                                 (KeyCode::Char('r'), _) | (KeyCode::Enter, _) => {
+                                    app.state.last_rebuild_at = Some(std::time::Instant::now());
                                     let build_tx = tx_log.clone();
                                     let build_evt_tx = tx_build.clone();
                                     let _ = commands::build_and_launch(&app.config, &app.state, build_tx, build_evt_tx).await;

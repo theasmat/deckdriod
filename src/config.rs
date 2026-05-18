@@ -6,6 +6,7 @@ pub struct Config {
     pub app_id: String,
     pub activity: String,
     pub watch_latency: f64,
+    pub rebuild_gap: f64,
     pub custom_commands: HashMap<char, String>,
 }
 
@@ -17,6 +18,7 @@ impl Config {
         // Defaults from the original project
         map.insert("APP_ID".to_string(), "com.mfc.manager.kotlin.dev".to_string());
         map.insert("WATCH_LATENCY".to_string(), "1.0".to_string());
+        map.insert("REBUILD_GAP".to_string(), "2.0".to_string());
 
         // Load .deckdriodconfig if it exists
         if Path::new(".deckdriodconfig").exists() {
@@ -46,10 +48,15 @@ impl Config {
             .and_then(|s| s.parse().ok())
             .unwrap_or(1.0);
 
+        let rebuild_gap = map.get("REBUILD_GAP")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(2.0);
+
         Config {
             app_id,
             activity,
             watch_latency,
+            rebuild_gap,
             custom_commands,
         }
     }
