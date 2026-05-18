@@ -69,6 +69,7 @@ pub struct AppState {
     pub show_layout_bounds: bool,
     pub last_rebuild_at: Option<std::time::Instant>,
     pub settings_index: usize,
+    pub log_scroll: u16,
 }
 
 impl Default for AppState {
@@ -92,6 +93,7 @@ impl Default for AppState {
             show_layout_bounds: false,
             last_rebuild_at: None,
             settings_index: 0,
+            log_scroll: 0,
         }
     }
 }

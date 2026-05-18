@@ -1,0 +1,4 @@
+APP_ID=com.mfc.manager.kotlin.dev
+ACTIVITY=com.mfc.manager.kotlin.dev/com.mfc.manager.android.MainActivity
+WATCH_LATENCY=1.0
+REBUILD_GAP=2.0

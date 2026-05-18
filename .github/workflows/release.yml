@@ -66,3 +66,40 @@ jobs:
           files: artifacts/**/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  update-homebrew:
+    name: Update Homebrew Tap
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Tap
+        uses: actions/checkout@v4
+        with:
+          repository: theasmat/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN || secrets.GITHUB_TOKEN }}
+          path: tap
+
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Update Formula
+        shell: bash
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          SHA_ARM=$(sha256sum artifacts/deckdriod-aarch64-apple-darwin/deckdriod-aarch64-apple-darwin.tar.gz | awk '{print $1}')
+          SHA_INTEL=$(sha256sum artifacts/deckdriod-x86_64-apple-darwin/deckdriod-x86_64-apple-darwin.tar.gz | awk '{print $1}')
+          SHA_LINUX=$(sha256sum artifacts/deckdriod-x86_64-unknown-linux-musl/deckdriod-x86_64-unknown-linux-musl.tar.gz | awk '{print $1}')
+          
+          cd tap
+          sed -i "s/version \".*\"/version \"$VERSION\"/" Formula/deckdriod.rb
+          sed -i "/aarch64-apple-darwin.tar.gz\"/,/sha256 \".*\"/ s/sha256 \".*\"/sha256 \"$SHA_ARM\"/" Formula/deckdriod.rb
+          sed -i "/x86_64-apple-darwin.tar.gz\"/,/sha256 \".*\"/ s/sha256 \".*\"/sha256 \"$SHA_INTEL\"/" Formula/deckdriod.rb
+          sed -i "/unknown-linux-musl.tar.gz\"/,/sha256 \".*\"/ s/sha256 \".*\"/sha256 \"$SHA_LINUX\"/" Formula/deckdriod.rb
+          
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/deckdriod.rb
+          git commit -m "Update DeckDriod to v$VERSION"
+          git push
