@@ -10,7 +10,7 @@ use config::Config;
 use state::AppState;
 use logcat::LogcatManager;
 use crossterm::{
-    event::{self, Event, KeyCode, KeyModifiers},
+    event::{self, Event, KeyCode, KeyModifiers, MouseEventKind, EnableMouseCapture, DisableMouseCapture},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -114,7 +114,7 @@ async fn main() -> Result<()> {
     // UI setup
     enable_raw_mode()?;
     let mut stdout = stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -192,7 +192,28 @@ async fn main() -> Result<()> {
             }
             res = tokio::task::spawn_blocking(|| event::poll(std::time::Duration::from_millis(10))) => {
                 if let Ok(Ok(true)) = res {
-                    if let Event::Key(key) = event::read()? {
+                    let ev = event::read()?;
+                    
+                    if let Event::Mouse(mouse) = ev {
+                        match mouse.kind {
+                            MouseEventKind::ScrollUp => {
+                                app.state.autoscroll = false;
+                                let current = app.log_state.selected().unwrap_or(0);
+                                app.log_state.select(Some(current.saturating_sub(1)));
+                            }
+                            MouseEventKind::ScrollDown => {
+                                app.state.autoscroll = false;
+                                let current = app.log_state.selected().unwrap_or(0);
+                                let max = app.filtered_logs().len().saturating_sub(1);
+                                if current < max {
+                                    app.log_state.select(Some(current + 1));
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    if let Event::Key(key) = ev {
                         match app.state.mode {
                         AppMode::Normal => {
                             match (key.code, key.modifiers) {
@@ -267,7 +288,21 @@ async fn main() -> Result<()> {
                                 (KeyCode::Down, _) | (KeyCode::Char('j'), _) => {
                                     app.state.autoscroll = false;
                                     let current = app.log_state.selected().unwrap_or(0);
-                                    app.log_state.select(Some(current + 1));
+                                    let max = app.filtered_logs().len().saturating_sub(1);
+                                    if current < max {
+                                        app.log_state.select(Some(current + 1));
+                                    }
+                                }
+                                (KeyCode::PageUp, _) => {
+                                    app.state.autoscroll = false;
+                                    let current = app.log_state.selected().unwrap_or(0);
+                                    app.log_state.select(Some(current.saturating_sub(20)));
+                                }
+                                (KeyCode::PageDown, _) => {
+                                    app.state.autoscroll = false;
+                                    let current = app.log_state.selected().unwrap_or(0);
+                                    let max = app.filtered_logs().len().saturating_sub(1);
+                                    app.log_state.select(Some((current + 20).min(max)));
                                 }
                                 (KeyCode::Char('g'), _) => {
                                     app.state.autoscroll = false;
@@ -275,6 +310,17 @@ async fn main() -> Result<()> {
                                 }
                                 (KeyCode::Char('G'), _) => {
                                     app.state.autoscroll = true;
+                                }
+                                (KeyCode::Char('y'), _) => {
+                                    if let Some(idx) = app.log_state.selected() {
+                                        let filtered = app.filtered_logs();
+                                        if let Some(line) = filtered.get(idx) {
+                                            if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                                                let _ = clipboard.set_text((*line).clone());
+                                                let _ = tx_log.send("[ok] line yanked to clipboard".to_string());
+                                            }
+                                        }
+                                    }
                                 }
                                 (KeyCode::Char('1'), _) => app.state.min_log_level = LogLevel::Verbose,
                                 (KeyCode::Char('2'), _) => app.state.min_log_level = LogLevel::Debug,
@@ -344,7 +390,7 @@ async fn main() -> Result<()> {
 }
 
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
     log_manager.stop();
     Ok(())
 }
@@ -555,8 +601,10 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
             Line::from(vec![Span::styled(" b         ", Style::default().fg(Color::Cyan)), Span::raw(": Toggle Layout Bounds")]),
             Line::from(vec![Span::styled(" /         ", Style::default().fg(Color::Cyan)), Span::raw(": Search Logs")]),
             Line::from(vec![Span::styled(" 1-5       ", Style::default().fg(Color::Cyan)), Span::raw(": Set Min Log Level")]),
-            Line::from(vec![Span::styled(" k / j     ", Style::default().fg(Color::Cyan)), Span::raw(": Scroll Up/Down")]),
+            Line::from(vec![Span::styled(" k / j     ", Style::default().fg(Color::Cyan)), Span::raw(": Scroll Up/Down (Wheel works too)")]),
+            Line::from(vec![Span::styled(" PgUp/PgDn ", Style::default().fg(Color::Cyan)), Span::raw(": Scroll 20 lines")]),
             Line::from(vec![Span::styled(" G         ", Style::default().fg(Color::Cyan)), Span::raw(": Follow Bottom")]),
+            Line::from(vec![Span::styled(" y         ", Style::default().fg(Color::Cyan)), Span::raw(": Yank (Copy) line to Clipboard")]),
             Line::from(vec![Span::styled(" e         ", Style::default().fg(Color::Cyan)), Span::raw(": Export Logs to deckdriod_logs.txt")]),
             Line::from(vec![Span::styled(" d         ", Style::default().fg(Color::Cyan)), Span::raw(": Android Dev Menu")]),
             Line::from(vec![Span::styled(" x         ", Style::default().fg(Color::Cyan)), Span::raw(": Clear App Data")]),
