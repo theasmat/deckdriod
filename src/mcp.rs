@@ -16,10 +16,11 @@ use crate::state::SharedLogState;
 #[derive(Clone)]
 struct AppState {
     logs: Arc<RwLock<SharedLogState>>,
+    port: u16,
 }
 
 pub async fn run_server(port: u16, shared_logs: Arc<RwLock<SharedLogState>>, mut shutdown_rx: mpsc::Receiver<()>) {
-    let state = AppState { logs: shared_logs };
+    let state = AppState { logs: shared_logs, port };
 
     let app = Router::new()
         .route("/", get(root_handler))
@@ -43,8 +44,8 @@ async fn root_handler() -> &'static str {
     "DeckDriod MCP Server is running!\n\nRoutes:\n- /usage : Detailed usage guide & AI Prompts\n- /sse   : MCP SSE endpoint for AI assistants"
 }
 
-async fn usage_handler() -> String {
-    get_detailed_guide()
+async fn usage_handler(State(state): State<AppState>) -> String {
+    get_detailed_guide(state.port)
 }
 
 async fn sse_handler(
@@ -121,7 +122,7 @@ async fn message_handler(
             let tool_name = request["params"]["name"].as_str().unwrap_or("");
             let result = match tool_name {
                 "get_usage_guide" => {
-                    json!({ "content": [{ "type": "text", "text": get_detailed_guide() }] })
+                    json!({ "content": [{ "type": "text", "text": get_detailed_guide(state.port) }] })
                 },
                 "get_recent_logs" => {
                     let count = request["params"]["arguments"]["count"].as_u64().unwrap_or(100) as usize;
@@ -154,8 +155,8 @@ fn uuid_v4() -> String {
     format!("{:x}", now)
 }
 
-pub fn get_detailed_guide() -> String {
-    r#"# 🚀 DeckDriod Knowledge Base & Usage Guide
+pub fn get_detailed_guide(port: u16) -> String {
+    format!(r#"# 🚀 DeckDriod Knowledge Base & Usage Guide
 
 ## 📱 What is DeckDriod?
 DeckDriod is a high-performance, unified terminal dashboard for Android & Kotlin development, built in **Rust**. It eliminates the need for switching between Android Studio, separate Logcat terminals, and resource monitors.
@@ -195,7 +196,7 @@ By enabling MCP, you can use AI assistants to solve complex issues. Give your AI
 4. **Fix Build Errors**: "My Gradle build failed. Read the build logs from `get_recent_logs` and suggest what I need to change in my `build.gradle.kts`."
 
 ## ⚙️ Configuration (MCP Setup)
-Connect any MCP client to: `http://localhost:3000/sse`
+Connect any MCP client to: `http://localhost:{}/sse`
 You can change the port in `Settings (i)` or `.deckdriodconfig`.
-"#.to_string()
+"#, port)
 }
