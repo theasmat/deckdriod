@@ -2,12 +2,12 @@ use anyhow::Result;
 use tokio::process::Command;
 use std::process::Stdio;
 use crate::config::Config;
-use crate::state::AppState;
 use chrono;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::mpsc;
 use std::time::{Instant, Duration};
 use std::path::Path;
+use futures::future::join_all;
 
 #[derive(Debug, Clone)]
 pub enum BuildEvent {
@@ -68,14 +68,14 @@ pub async fn launch_emulator(avd_name: &str) -> Result<()> {
 
 pub async fn build_and_launch(
     config: &Config, 
-    state: &AppState, 
+    serials: Vec<String>,
+    auto_open: bool,
     tx_log: mpsc::UnboundedSender<String>,
     tx_build: mpsc::UnboundedSender<BuildEvent>
 ) -> Result<()> {
     let start_time = Instant::now();
     let _ = tx_log.send("[build] starting...".to_string());
     
-    // Check if project path exists
     let project_path = Path::new(&config.project_path);
     if !project_path.exists() {
         let _ = tx_log.send(format!("[err] project path does not exist: {}", config.project_path));
@@ -126,22 +126,29 @@ pub async fn build_and_launch(
         let _ = tx_build.send(BuildEvent::Complete(duration));
         let _ = tx_log.send(format!("[ok] build successful in {:.2}s", duration.as_secs_f32()));
         
-        if state.auto_open {
-            if let Some(ref serial) = state.device_serial {
-                Command::new("adb")
-                    .args(["-s", serial, "shell", "am", "force-stop", &config.app_id])
-                    .stdin(Stdio::null())
-                    .status()
-                    .await?;
-                
-                Command::new("adb")
-                    .args(["-s", serial, "shell", "am", "start", "-n", &config.activity])
-                    .stdin(Stdio::null())
-                    .status()
-                    .await?;
-                
-                let _ = tx_log.send(format!("[ok] launched on {}", serial));
+        if auto_open && !serials.is_empty() {
+            let mut tasks = Vec::new();
+            for serial in serials {
+                let s = serial.clone();
+                let cfg = config.clone();
+                let log_tx = tx_log.clone();
+                tasks.push(tokio::spawn(async move {
+                    let _ = Command::new("adb")
+                        .args(["-s", &s, "shell", "am", "force-stop", &cfg.app_id])
+                        .stdin(Stdio::null())
+                        .status()
+                        .await;
+                    
+                    let _ = Command::new("adb")
+                        .args(["-s", &s, "shell", "am", "start", "-n", &cfg.activity])
+                        .stdin(Stdio::null())
+                        .status()
+                        .await;
+                    
+                    let _ = log_tx.send(format!("[ok] launched on {}", s));
+                }));
             }
+            join_all(tasks).await;
         }
     } else {
         let _ = tx_build.send(BuildEvent::Failed);
@@ -151,149 +158,165 @@ pub async fn build_and_launch(
     Ok(())
 }
 
-pub async fn launch_app(config: &Config, state: &AppState, tx_log: mpsc::UnboundedSender<String>) -> Result<()> {
-    if let Some(ref serial) = state.device_serial {
-        let _ = tx_log.send(format!("[info] launching {} on {}...", config.app_id, serial));
-        
-        Command::new("adb")
-            .args(["-s", serial, "shell", "am", "force-stop", &config.app_id])
-            .stdin(Stdio::null())
-            .status()
-            .await?;
-        
-        Command::new("adb")
-            .args(["-s", serial, "shell", "am", "start", "-n", &config.activity])
-            .stdin(Stdio::null())
-            .status()
-            .await?;
-        
-        let _ = tx_log.send(format!("[ok] launched on {}", serial));
+pub async fn launch_app(config: &Config, serials: Vec<String>, tx_log: mpsc::UnboundedSender<String>) -> Result<()> {
+    let mut tasks = Vec::new();
+    for serial in serials {
+        let s = serial.clone();
+        let cfg = config.clone();
+        let log_tx = tx_log.clone();
+        tasks.push(tokio::spawn(async move {
+            let _ = log_tx.send(format!("[info] launching {} on {}...", cfg.app_id, s));
+            let _ = Command::new("adb")
+                .args(["-s", &s, "shell", "am", "force-stop", &cfg.app_id])
+                .stdin(Stdio::null())
+                .status()
+                .await;
+            
+            let _ = Command::new("adb")
+                .args(["-s", &s, "shell", "am", "start", "-n", &cfg.activity])
+                .stdin(Stdio::null())
+                .status()
+                .await;
+            
+            let _ = log_tx.send(format!("[ok] launched on {}", s));
+        }));
     }
+    join_all(tasks).await;
     Ok(())
 }
 
-pub async fn take_screenshot(config: &Config, state: &AppState, tx_log: mpsc::UnboundedSender<String>) -> Result<()> {
-    if let Some(ref serial) = state.device_serial {
-        let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
-        let filename = format!("screenshot_{}.png", timestamp);
-        let remote_path = format!("/sdcard/{}", filename);
-        
-        Command::new("adb")
-            .args(["-s", serial, "shell", "screencap", "-p", &remote_path])
-            .stdin(Stdio::null())
-            .status()
-            .await?;
-        
-        let local_path = Path::new(&config.output_path).join(&filename);
-        
-        Command::new("adb")
-            .args(["-s", serial, "pull", &remote_path, local_path.to_str().unwrap()])
-            .stdin(Stdio::null())
-            .status()
-            .await?;
-        
-        Command::new("adb")
-            .args(["-s", serial, "shell", "rm", &remote_path])
-            .stdin(Stdio::null())
-            .status()
-            .await?;
+pub async fn take_screenshot(config: &Config, serials: Vec<String>, tx_log: mpsc::UnboundedSender<String>) -> Result<()> {
+    let mut tasks = Vec::new();
+    for serial in serials {
+        let s = serial.clone();
+        let cfg = config.clone();
+        let log_tx = tx_log.clone();
+        tasks.push(tokio::spawn(async move {
+            let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
+            let filename = format!("screenshot_{}_{}.png", s.replace(":", "_"), timestamp);
+            let remote_path = format!("/sdcard/{}", filename);
             
-        let _ = tx_log.send(format!("[ok] screenshot saved to {}/{}", config.output_path, filename));
+            let _ = Command::new("adb")
+                .args(["-s", &s, "shell", "screencap", "-p", &remote_path])
+                .stdin(Stdio::null())
+                .status()
+                .await;
+            
+            let local_path = Path::new(&cfg.output_path).join(&filename);
+            
+            let _ = Command::new("adb")
+                .args(["-s", &s, "pull", &remote_path, local_path.to_str().unwrap()])
+                .stdin(Stdio::null())
+                .status()
+                .await;
+            
+            let _ = Command::new("adb")
+                .args(["-s", &s, "shell", "rm", &remote_path])
+                .stdin(Stdio::null())
+                .status()
+                .await;
+                
+            let _ = log_tx.send(format!("[ok] screenshot saved: {}/{}", cfg.output_path, filename));
+        }));
     }
+    join_all(tasks).await;
     Ok(())
 }
 
 pub async fn clear_app_data(
     config: &Config, 
-    state: &AppState, 
+    serials: Vec<String>,
+    auto_open: bool,
     tx_log: mpsc::UnboundedSender<String>
 ) -> Result<()> {
-    if let Some(ref serial) = state.device_serial {
-        let _ = tx_log.send(format!("[info] clearing app data for {}...", config.app_id));
-        Command::new("adb")
-            .args(["-s", serial, "shell", "pm", "clear", &config.app_id])
-            .stdin(Stdio::null())
-            .status()
-            .await?;
-        
-        let _ = tx_log.send("[ok] data cleared".to_string());
-        if state.auto_open {
-            Command::new("adb")
-                .args(["-s", serial, "shell", "am", "start", "-n", &config.activity])
+    let mut tasks = Vec::new();
+    for serial in serials {
+        let s = serial.clone();
+        let cfg = config.clone();
+        let log_tx = tx_log.clone();
+        tasks.push(tokio::spawn(async move {
+            let _ = log_tx.send(format!("[info] clearing data for {} on {}...", cfg.app_id, s));
+            let _ = Command::new("adb")
+                .args(["-s", &s, "shell", "pm", "clear", &cfg.app_id])
                 .stdin(Stdio::null())
                 .status()
-                .await?;
-        }
+                .await;
+            
+            let _ = log_tx.send(format!("[ok] data cleared on {}", s));
+            if auto_open {
+                let _ = Command::new("adb")
+                    .args(["-s", &s, "shell", "am", "start", "-n", &cfg.activity])
+                    .stdin(Stdio::null())
+                    .status()
+                    .await;
+            }
+        }));
     }
+    join_all(tasks).await;
     Ok(())
 }
 
-pub async fn toggle_layout_bounds(state: &mut AppState) -> Result<()> {
-    if let Some(ref serial) = state.device_serial {
-        state.show_layout_bounds = !state.show_layout_bounds;
-        let val = if state.show_layout_bounds { "true" } else { "false" };
-        
-        Command::new("adb")
-            .args(["-s", serial, "shell", "setprop", "debug.layout", val])
-            .status()
-            .await?;
-            
-        Command::new("adb")
-            .args(["-s", serial, "shell", "service", "call", "activity", "1599295570"])
-            .status()
-            .await?;
+pub async fn toggle_layout_bounds(serials: Vec<String>, show: bool) -> Result<()> {
+    let mut tasks = Vec::new();
+    for serial in serials {
+        let s = serial.clone();
+        tasks.push(tokio::spawn(async move {
+            let val = if show { "true" } else { "false" };
+            let _ = Command::new("adb").args(["-s", &s, "shell", "setprop", "debug.layout", val]).status().await;
+            let _ = Command::new("adb").args(["-s", &s, "shell", "service", "call", "activity", "1599295570"]).status().await;
+        }));
     }
+    join_all(tasks).await;
     Ok(())
 }
 
 pub struct Recorder {
-    child: Option<tokio::process::Child>,
-    filename: String,
+    children: Vec<(String, tokio::process::Child, String)>,
 }
 
 impl Recorder {
     pub fn new() -> Self {
-        Self { child: None, filename: String::new() }
+        Self { children: Vec::new() }
     }
 
-    pub async fn start(&mut self, serial: &str) -> Result<()> {
-        let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
-        self.filename = format!("record_{}.mp4", timestamp);
-        let remote_path = format!("/sdcard/{}", self.filename);
-        
-        let child = Command::new("adb")
-            .args(["-s", serial, "shell", "screenrecord", &remote_path])
-            .stdin(Stdio::null())
-            .spawn()?;
+    pub async fn start(&mut self, serials: Vec<String>) -> Result<()> {
+        for serial in serials {
+            let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
+            let filename = format!("record_{}_{}.mp4", serial.replace(":", "_"), timestamp);
+            let remote_path = format!("/sdcard/{}", filename);
             
-        self.child = Some(child);
+            let child = Command::new("adb")
+                .args(["-s", &serial, "shell", "screenrecord", &remote_path])
+                .stdin(Stdio::null())
+                .spawn()?;
+                
+            self.children.push((serial, child, filename));
+        }
         Ok(())
     }
 
-    pub async fn stop(&mut self, config: &Config, serial: &str, tx_log: mpsc::UnboundedSender<String>) -> Result<()> {
-        if let Some(mut child) = self.child.take() {
-            let _ = child.start_kill();
-            let _ = child.wait().await;
-            
-            let _ = tx_log.send(format!("[info] pulling recording {}...", self.filename));
-            let remote_path = format!("/sdcard/{}", self.filename);
-            
-            tokio::time::sleep(Duration::from_secs(1)).await; // Wait for file to finalize
-
-            let local_path = Path::new(&config.output_path).join(&self.filename);
-
-            Command::new("adb")
-                .args(["-s", serial, "pull", &remote_path, local_path.to_str().unwrap()])
-                .status()
-                .await?;
+    pub async fn stop(&mut self, config: &Config, tx_log: mpsc::UnboundedSender<String>) -> Result<()> {
+        let mut tasks = Vec::new();
+        let children = std::mem::take(&mut self.children);
+        
+        for (serial, mut child, filename) in children {
+            let cfg = config.clone();
+            let log_tx = tx_log.clone();
+            tasks.push(tokio::spawn(async move {
+                let _ = child.start_kill();
+                let _ = child.wait().await;
                 
-            Command::new("adb")
-                .args(["-s", serial, "shell", "rm", &remote_path])
-                .status()
-                .await?;
+                let remote_path = format!("/sdcard/{}", filename);
+                tokio::time::sleep(Duration::from_secs(1)).await;
+
+                let local_path = Path::new(&cfg.output_path).join(&filename);
+                let _ = Command::new("adb").args(["-s", &serial, "pull", &remote_path, local_path.to_str().unwrap()]).status().await;
+                let _ = Command::new("adb").args(["-s", &serial, "shell", "rm", &remote_path]).status().await;
                 
-            let _ = tx_log.send(format!("[ok] recording saved to {}/{}", config.output_path, self.filename));
+                let _ = log_tx.send(format!("[ok] recording saved: {}/{}", cfg.output_path, filename));
+            }));
         }
+        join_all(tasks).await;
         Ok(())
     }
 }

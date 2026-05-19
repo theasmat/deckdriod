@@ -73,7 +73,6 @@ impl App {
                     trace.push_str(&l);
                 }
             } else {
-                // End of crash trace
                 self.state.is_capturing_crash = false;
                 if let Some(ref trace) = self.state.last_crash_trace {
                     let _ = std::fs::write("crash_report.txt", trace);
@@ -81,7 +80,7 @@ impl App {
             }
         }
 
-        // 2. Structured App Logging (Expo-style)
+        // 2. Structured App Logging
         let mut logs_to_add = Vec::new();
         if l.contains("[DeckDriod]") {
             if let Some(json_start) = l.find('{') {
@@ -116,7 +115,7 @@ impl App {
                     if self.cache_app.len() > 5000 { self.cache_app.remove(0); }
                 }
 
-                if entry.contains(" E/") || entry.contains("[err]") || entry.contains("[build-err]") || entry.contains(" FATAL") {
+                if entry.contains(" E/") || entry.contains("[err]") || entry.contains("[build-err]") || entry.contains("FATAL") {
                     self.cache_err.push(entry.clone());
                     if self.cache_err.len() > 5000 { self.cache_err.remove(0); }
                 }
@@ -138,13 +137,11 @@ impl App {
     }
 
     fn matches_filter(&self, log: &str) -> bool {
-        // Tag filter
         if !self.config.log_tag.is_empty() {
             if !log.contains(&self.config.log_tag) {
                 return false;
             }
         }
-
         if let Some(level) = LogLevel::from_str(log) {
             if (level as u8) < (self.state.min_log_level as u8) {
                 return false;
@@ -163,24 +160,25 @@ impl App {
         self.cache_app.clear();
         self.cache_build.clear();
         self.cache_err.clear();
-
         for l in &self.logs {
             if self.matches_filter(l) {
                 self.cache_all.push(l.clone());
-                if l.contains("[build]") || l.contains("[build-err]") {
-                    self.cache_build.push(l.clone());
-                } else {
-                    self.cache_app.push(l.clone());
-                }
-                if l.contains(" E/") || l.contains("[err]") || l.contains("[build-err]") || l.contains(" FATAL") {
-                    self.cache_err.push(l.clone());
-                }
+                if l.contains("[build]") || l.contains("[build-err]") { self.cache_build.push(l.clone()); } 
+                else { self.cache_app.push(l.clone()); }
+                if l.contains(" E/") || l.contains("[err]") || l.contains("[build-err]") || l.contains(" FATAL") { self.cache_err.push(l.clone()); }
             }
         }
-        
         if self.state.autoscroll {
             let current_cache_len = self.current_log_len();
             self.state.log_scroll = current_cache_len.saturating_sub(1);
+        }
+    }
+
+    async fn get_target_serials(&self) -> Vec<String> {
+        if self.state.is_broadcast {
+            commands::get_devices().await.unwrap_or_default()
+        } else {
+            self.state.device_serial.as_ref().map(|s| vec![s.clone()]).unwrap_or_default()
         }
     }
 }
@@ -215,12 +213,8 @@ async fn main() -> Result<()> {
     let devices = commands::get_devices().await.unwrap_or_default();
     if devices.is_empty() {
         let avds = commands::get_avds().await.unwrap_or_default();
-        if avds.is_empty() {
-            state.mode = AppMode::NoHardwareHelp;
-        } else {
-            state.available_avds = avds;
-            state.mode = AppMode::EmulatorSelect;
-        }
+        if avds.is_empty() { state.mode = AppMode::NoHardwareHelp; } 
+        else { state.available_avds = avds; state.mode = AppMode::EmulatorSelect; }
     } else if devices.len() == 1 {
         state.device_serial = Some(devices[0].clone());
     } else {
@@ -255,18 +249,13 @@ async fn main() -> Result<()> {
         let stats_serial = serial.clone();
         let stats_app_id = app.config.app_id.clone();
         tokio::spawn(stats::start_stats_polling(stats_serial, stats_app_id, tx_stats.clone()));
-
-        if app.state.show_logs {
-            let _ = log_manager.start(serial, &app.config.app_id, tx_log.clone()).await;
-        }
-
+        if app.state.show_logs { let _ = log_manager.start(serial, &app.config.app_id, tx_log.clone()).await; }
         let build_tx = tx_log.clone();
         let build_evt_tx = tx_build.clone();
         let cfg_bg = app.config.clone();
-        let st_bg = app.state.clone();
-        tokio::spawn(async move {
-            let _ = commands::build_and_launch(&cfg_bg, &st_bg, build_tx, build_evt_tx).await;
-        });
+        let serials = vec![serial.clone()];
+        let auto_open = app.state.auto_open;
+        tokio::spawn(async move { let _ = commands::build_and_launch(&cfg_bg, serials, auto_open, build_tx, build_evt_tx).await; });
     }
 
     let mut interval = tokio::time::interval(std::time::Duration::from_millis(100));
@@ -292,9 +281,7 @@ async fn main() -> Result<()> {
                             let stats_serial = serial.clone();
                             let stats_app_id = app.config.app_id.clone();
                             tokio::spawn(stats::start_stats_polling(stats_serial, stats_app_id, tx_stats.clone()));
-                            if app.state.show_logs {
-                                let _ = log_manager.start(&serial, &app.config.app_id, tx_log.clone()).await;
-                            }
+                            if app.state.show_logs { let _ = log_manager.start(&serial, &app.config.app_id, tx_log.clone()).await; }
                         }
                     }
                 }
@@ -304,14 +291,8 @@ async fn main() -> Result<()> {
                 app.state.stats.last_cpu = update.cpu;
                 app.state.stats.last_mem = update.mem;
                 app.state.stats.battery_level = update.battery;
-                if update.cpu > 0.0 {
-                    app.state.stats.cpu_usage.push_back(update.cpu);
-                    if app.state.stats.cpu_usage.len() > 100 { app.state.stats.cpu_usage.pop_front(); }
-                }
-                if update.mem > 0.0 {
-                    app.state.stats.mem_usage.push_back(update.mem);
-                    if app.state.stats.mem_usage.len() > 100 { app.state.stats.mem_usage.pop_front(); }
-                }
+                if update.cpu > 0.0 { app.state.stats.cpu_usage.push_back(update.cpu); if app.state.stats.cpu_usage.len() > 100 { app.state.stats.cpu_usage.pop_front(); } }
+                if update.mem > 0.0 { app.state.stats.mem_usage.push_back(update.mem); if app.state.stats.mem_usage.len() > 100 { app.state.stats.mem_usage.pop_front(); } }
             }
             Some(evt) = rx_build.recv() => {
                 match evt {
@@ -330,10 +311,7 @@ async fn main() -> Result<()> {
             Some(_) = rx_watch.recv() => {
                 if app.state.auto_rebuild {
                     let now = std::time::Instant::now();
-                    let should_build = match app.state.last_rebuild_at {
-                        Some(last) => now.duration_since(last).as_secs_f64() >= app.config.rebuild_gap,
-                        None => true,
-                    };
+                    let should_build = match app.state.last_rebuild_at { Some(last) => now.duration_since(last).as_secs_f64() >= app.config.rebuild_gap, None => true };
                     if should_build {
                         app.state.last_rebuild_at = Some(now);
                         app.state.current_tab = Tab::Build;
@@ -342,10 +320,9 @@ async fn main() -> Result<()> {
                         let build_tx = tx_log.clone();
                         let build_evt_tx = tx_build.clone();
                         let cfg = app.config.clone();
-                        let st = app.state.clone();
-                        tokio::spawn(async move {
-                            let _ = commands::build_and_launch(&cfg, &st, build_tx, build_evt_tx).await;
-                        });
+                        let serials = app.get_target_serials().await;
+                        let auto_open = app.state.auto_open;
+                        tokio::spawn(async move { let _ = commands::build_and_launch(&cfg, serials, auto_open, build_tx, build_evt_tx).await; });
                     }
                 }
             }
@@ -354,44 +331,24 @@ async fn main() -> Result<()> {
                     let ev = event::read()?;
                     if let Event::Mouse(mouse) = ev {
                         match mouse.kind {
-                            MouseEventKind::ScrollUp => {
-                                app.state.autoscroll = false;
-                                app.state.log_scroll = app.state.log_scroll.saturating_sub(1);
-                                app.state.selection_start = None;
-                            }
-                            MouseEventKind::ScrollDown => {
-                                app.state.autoscroll = false;
-                                app.state.log_scroll = app.state.log_scroll.saturating_add(1);
-                                app.state.selection_start = None;
-                            }
+                            MouseEventKind::ScrollUp => { app.state.autoscroll = false; app.state.log_scroll = app.state.log_scroll.saturating_sub(1); app.state.selection_start = None; }
+                            MouseEventKind::ScrollDown => { app.state.autoscroll = false; app.state.log_scroll = app.state.log_scroll.saturating_add(1); app.state.selection_start = None; }
                             MouseEventKind::Down(_) => {
                                 let log_area_top = if app.state.mode == AppMode::Normal { 5 } else { 8 };
                                 if mouse.row >= log_area_top {
                                     app.state.selection_start = Some(app.state.log_scroll + (mouse.row.saturating_sub(log_area_top)) as usize);
                                     app.state.selection_end = app.state.selection_start;
-                                } else {
-                                    app.state.selection_start = None;
-                                }
+                                } else { app.state.selection_start = None; }
                             }
                             MouseEventKind::Drag(_) => {
                                 let log_area_top = if app.state.mode == AppMode::Normal { 5 } else { 8 };
                                 let term_height = terminal.size().unwrap_or(ratatui::layout::Size::new(0, 80)).height;
                                 let log_area_bottom = term_height.saturating_sub(2);
-
                                 if let Some(_start) = app.state.selection_start {
                                     let current_row_idx = app.state.log_scroll + (mouse.row.saturating_sub(log_area_top)) as usize;
                                     app.state.selection_end = Some(current_row_idx);
-
-                                    if mouse.row <= log_area_top + 1 {
-                                        app.state.log_scroll = app.state.log_scroll.saturating_sub(1);
-                                        app.state.autoscroll = false;
-                                    } else if mouse.row >= log_area_bottom {
-                                        let max_scroll = app.current_log_len().saturating_sub(1);
-                                        if app.state.log_scroll < max_scroll {
-                                            app.state.log_scroll += 1;
-                                            app.state.autoscroll = false;
-                                        }
-                                    }
+                                    if mouse.row <= log_area_top + 1 { app.state.log_scroll = app.state.log_scroll.saturating_sub(1); app.state.autoscroll = false; } 
+                                    else if mouse.row >= log_area_bottom { let max_scroll = app.current_log_len().saturating_sub(1); if app.state.log_scroll < max_scroll { app.state.log_scroll += 1; app.state.autoscroll = false; } }
                                 }
                             }
                             _ => {}
@@ -411,18 +368,15 @@ async fn main() -> Result<()> {
                                         let build_tx = tx_log.clone();
                                         let build_evt_tx = tx_build.clone();
                                         let cfg = app.config.clone();
-                                        let st = app.state.clone();
-                                        tokio::spawn(async move {
-                                            let _ = commands::build_and_launch(&cfg, &st, build_tx, build_evt_tx).await;
-                                        });
+                                        let serials = app.get_target_serials().await;
+                                        let auto_open = app.state.auto_open;
+                                        tokio::spawn(async move { let _ = commands::build_and_launch(&cfg, serials, auto_open, build_tx, build_evt_tx).await; });
                                     }
                                     (KeyCode::Char('c'), _) => {
                                         app.logs.clear(); app.cache_all.clear(); app.cache_app.clear(); app.cache_build.clear(); app.cache_err.clear();
                                         app.state.last_crash = None; app.state.search_query.clear();
                                         app.state.log_scroll = 0;
-                                        if let Some(ref serial) = app.state.device_serial {
-                                            let _ = log_manager.start(serial, &app.config.app_id, tx_log.clone()).await;
-                                        }
+                                        if let Some(ref serial) = app.state.device_serial { let _ = log_manager.start(serial, &app.config.app_id, tx_log.clone()).await; }
                                     }
                                     (KeyCode::Char('h'), _) => { app.state.mode = AppMode::Help; }
                                     (KeyCode::Char('i'), _) => { app.state.mode = AppMode::Settings; app.state.settings_index = 0; }
@@ -430,11 +384,8 @@ async fn main() -> Result<()> {
                                     (KeyCode::Char('o'), _) => { app.state.auto_open = !app.state.auto_open; }
                                     (KeyCode::Char('l'), _) => {
                                         app.state.show_logs = !app.state.show_logs;
-                                        if app.state.show_logs { 
-                                            if let Some(ref serial) = app.state.device_serial {
-                                                let _ = log_manager.start(serial, &app.config.app_id, tx_log.clone()).await; 
-                                            }
-                                        } else { log_manager.stop(); }
+                                        if app.state.show_logs { if let Some(ref serial) = app.state.device_serial { let _ = log_manager.start(serial, &app.config.app_id, tx_log.clone()).await; } } 
+                                        else { log_manager.stop(); }
                                     }
                                     (KeyCode::Char('L'), _) => {
                                         app.state.current_tab = Tab::App;
@@ -442,151 +393,101 @@ async fn main() -> Result<()> {
                                         app.refresh_filter_cache();
                                         let log_tx = tx_log.clone();
                                         let cfg = app.config.clone();
-                                        let st = app.state.clone();
-                                        tokio::spawn(async move { let _ = commands::launch_app(&cfg, &st, log_tx).await; });
+                                        let serials = app.get_target_serials().await;
+                                        tokio::spawn(async move { let _ = commands::launch_app(&cfg, serials, log_tx).await; });
+                                    }
+                                    (KeyCode::Char('B'), _) => {
+                                        app.state.is_broadcast = !app.state.is_broadcast;
+                                        let msg = if app.state.is_broadcast { "[info] BROADCAST mode ON (all devices)" } else { "[info] BROADCAST mode OFF (selected device only)" };
+                                        let _ = tx_log.send(msg.to_string());
                                     }
                                     (KeyCode::Char('E'), _) => {
                                         if let Ok(avds) = commands::get_avds().await {
-                                            if !avds.is_empty() {
-                                                app.state.available_avds = avds;
-                                                app.state.mode = AppMode::EmulatorSelect;
-                                                app.state.settings_index = 0;
-                                            } else {
-                                                let _ = tx_log.send("[err] no emulators found".to_string());
-                                            }
+                                            if !avds.is_empty() { app.state.available_avds = avds; app.state.mode = AppMode::EmulatorSelect; app.state.settings_index = 0; } 
+                                            else { let _ = tx_log.send("[err] no emulators found".to_string()); }
                                         }
                                     }
                                     (KeyCode::Char('s'), _) => {
                                         let log_tx = tx_log.clone();
                                         let cfg = app.config.clone();
-                                        let st = app.state.clone();
-                                        tokio::spawn(async move { let _ = commands::take_screenshot(&cfg, &st, log_tx).await; });
+                                        let serials = app.get_target_serials().await;
+                                        tokio::spawn(async move { let _ = commands::take_screenshot(&cfg, serials, log_tx).await; });
                                     }
                                     (KeyCode::Char('v'), _) => {
                                         let rec = Arc::clone(&recorder);
-                                        if let Some(ref serial) = app.state.device_serial {
-                                            let s = serial.clone();
+                                        let serials = app.get_target_serials().await;
+                                        if !serials.is_empty() {
                                             let log_tx = tx_log.clone();
                                             let cfg = app.config.clone();
                                             if app.state.is_recording {
                                                 app.state.is_recording = false;
-                                                tokio::spawn(async move {
-                                                    let mut r = rec.lock().await;
-                                                    let _ = r.stop(&cfg, &s, log_tx).await;
-                                                });
+                                                tokio::spawn(async move { let mut r = rec.lock().await; let _ = r.stop(&cfg, log_tx).await; });
                                             } else {
                                                 app.state.is_recording = true;
                                                 tokio::spawn(async move {
                                                     let mut r = rec.lock().await;
-                                                    if let Ok(_) = r.start(&s).await {
-                                                        let _ = log_tx.send("[info] recording started...".to_string());
-                                                    }
+                                                    if let Ok(_) = r.start(serials).await { let _ = log_tx.send("[info] recording started...".to_string()); }
                                                 });
                                             }
                                         }
                                     }
-                                    (KeyCode::Char('b'), _) => { let _ = commands::toggle_layout_bounds(&mut app.state).await; }
+                                    (KeyCode::Char('b'), _) => {
+                                        let serials = app.get_target_serials().await;
+                                        app.state.show_layout_bounds = !app.state.show_layout_bounds;
+                                        let show = app.state.show_layout_bounds;
+                                        tokio::spawn(async move { let _ = commands::toggle_layout_bounds(serials, show).await; });
+                                    }
                                     (KeyCode::Char('u'), _) => { app.state.mode = AppMode::DeepLink; app.state.input_buffer.clear(); }
                                     (KeyCode::Char('x'), _) => {
                                         let log_tx = tx_log.clone();
                                         let cfg = app.config.clone();
-                                        let st = app.state.clone();
-                                        tokio::spawn(async move { let _ = commands::clear_app_data(&cfg, &st, log_tx).await; });
+                                        let serials = app.get_target_serials().await;
+                                        let auto_open = app.state.auto_open;
+                                        tokio::spawn(async move { let _ = commands::clear_app_data(&cfg, serials, auto_open, log_tx).await; });
+                                    }
+                                    (KeyCode::Char('e'), _) => {
+                                        let content = app.logs.iter().cloned().collect::<Vec<_>>().join("\n");
+                                        let _ = std::fs::write("deckdriod_export.txt", content);
+                                        let _ = tx_log.send("[ok] logs exported to deckdriod_export.txt".to_string());
                                     }
                                     (KeyCode::Char('d'), _) => {
-                                        if let Some(ref s) = app.state.device_serial {
-                                            let s = s.clone();
-                                            tokio::spawn(async move {
-                                                let _ = tokio::process::Command::new("adb").args(["-s", &s, "shell", "input", "keyevent", "82"]).status().await;
-                                            });
-                                        }
+                                        let serials = app.get_target_serials().await;
+                                        tokio::spawn(async move {
+                                            for s in serials { let _ = tokio::process::Command::new("adb").args(["-s", &s, "shell", "input", "keyevent", "82"]).status().await; }
+                                        });
                                     }
                                     (KeyCode::Char('/'), _) => { app.state.mode = AppMode::Search; app.state.input_buffer.clear(); }
-                                    (KeyCode::Up, _) | (KeyCode::Char('k'), _) => {
-                                        app.state.autoscroll = false;
-                                        app.state.log_scroll = app.state.log_scroll.saturating_sub(1);
-                                    }
-                                    (KeyCode::Down, _) | (KeyCode::Char('j'), _) => {
-                                        app.state.autoscroll = false;
-                                        app.state.log_scroll = app.state.log_scroll.saturating_add(1);
-                                    }
-                                    (KeyCode::PageUp, _) => {
-                                        app.state.autoscroll = false;
-                                        app.state.log_scroll = app.state.log_scroll.saturating_sub(20);
-                                    }
-                                    (KeyCode::PageDown, _) => {
-                                        app.state.autoscroll = false;
-                                        app.state.log_scroll = app.state.log_scroll.saturating_add(20);
-                                    }
+                                    (KeyCode::Up, _) | (KeyCode::Char('k'), _) => { app.state.autoscroll = false; app.state.log_scroll = app.state.log_scroll.saturating_sub(1); }
+                                    (KeyCode::Down, _) | (KeyCode::Char('j'), _) => { app.state.autoscroll = false; app.state.log_scroll = app.state.log_scroll.saturating_add(1); }
+                                    (KeyCode::PageUp, _) => { app.state.autoscroll = false; app.state.log_scroll = app.state.log_scroll.saturating_sub(20); }
+                                    (KeyCode::PageDown, _) => { app.state.autoscroll = false; app.state.log_scroll = app.state.log_scroll.saturating_add(20); }
                                     (KeyCode::Char('g'), _) => { app.state.autoscroll = false; app.state.log_scroll = 0; }
                                     (KeyCode::Char('G'), _) => { app.state.autoscroll = true; }
                                     (KeyCode::Char('y'), _) => {
-                                        let current_cache = match app.state.current_tab {
-                                            Tab::Dashboard => &app.cache_all, Tab::App => &app.cache_app,
-                                            Tab::Build => &app.cache_build, Tab::Errors => &app.cache_err,
-                                        };
-                                        if let Some(line) = current_cache.get(app.state.log_scroll) {
-                                            if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                                                let _ = clipboard.set_text(line.clone());
-                                                let _ = tx_log.send("[ok] top visible line yanked".to_string());
-                                            }
-                                        }
+                                        let current_cache = match app.state.current_tab { Tab::Dashboard => &app.cache_all, Tab::App => &app.cache_app, Tab::Build => &app.cache_build, Tab::Errors => &app.cache_err };
+                                        if let Some(line) = current_cache.get(app.state.log_scroll) { if let Ok(mut clipboard) = arboard::Clipboard::new() { let _ = clipboard.set_text(line.clone()); let _ = tx_log.send("[ok] top visible line yanked".to_string()); } }
                                     }
-                                    (KeyCode::Char('C'), _) => {
-                                        if let Some(ref trace) = app.state.last_crash_trace {
-                                            if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                                                let _ = clipboard.set_text(trace.clone());
-                                                let _ = tx_log.send("[ok] last crash trace yanked".to_string());
-                                            }
-                                        }
-                                    }
+                                    (KeyCode::Char('C'), _) => { if let Some(ref trace) = app.state.last_crash_trace { if let Ok(mut clipboard) = arboard::Clipboard::new() { let _ = clipboard.set_text(trace.clone()); let _ = tx_log.send("[ok] last crash trace yanked".to_string()); } } }
                                     (KeyCode::Char('m'), _) => {
                                         app.state.mouse_captured = !app.state.mouse_captured;
-                                        if app.state.mouse_captured {
-                                            let _ = execute!(std::io::stdout(), EnableMouseCapture);
-                                            let _ = tx_log.send("[info] mouse capture ON".to_string());
-                                        } else {
-                                            let _ = execute!(std::io::stdout(), DisableMouseCapture);
-                                            let _ = tx_log.send("[info] mouse capture OFF".to_string());
-                                        }
+                                        if app.state.mouse_captured { let _ = execute!(std::io::stdout(), EnableMouseCapture); let _ = tx_log.send("[info] mouse capture ON".to_string()); } 
+                                        else { let _ = execute!(std::io::stdout(), DisableMouseCapture); let _ = tx_log.send("[info] mouse capture OFF".to_string()); }
                                     }
                                     (KeyCode::Char('A'), _) => {
-                                        let current_cache = match app.state.current_tab {
-                                            Tab::Dashboard => &app.cache_all, Tab::App => &app.cache_app,
-                                            Tab::Build => &app.cache_build, Tab::Errors => &app.cache_err,
-                                        };
-                                        if !current_cache.is_empty() {
-                                            let content = current_cache.join("\n");
-                                            if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                                                let _ = clipboard.set_text(content);
-                                                let _ = tx_log.send("[ok] all logs yanked".to_string());
-                                            }
-                                        }
+                                        let current_cache = match app.state.current_tab { Tab::Dashboard => &app.cache_all, Tab::App => &app.cache_app, Tab::Build => &app.cache_build, Tab::Errors => &app.cache_err };
+                                        if !current_cache.is_empty() { let content = current_cache.join("\n"); if let Ok(mut clipboard) = arboard::Clipboard::new() { let _ = clipboard.set_text(content); let _ = tx_log.send("[ok] all logs yanked".to_string()); } }
                                     }
-                                    (KeyCode::Tab, _) => {
-                                        app.state.current_tab = match app.state.current_tab {
-                                            Tab::Dashboard => Tab::App, Tab::App => Tab::Build,
-                                            Tab::Build => Tab::Errors, Tab::Errors => Tab::Dashboard,
-                                        };
-                                        app.refresh_filter_cache();
-                                    }
+                                    (KeyCode::Tab, _) => { app.state.current_tab = match app.state.current_tab { Tab::Dashboard => Tab::App, Tab::App => Tab::Build, Tab::Build => Tab::Errors, Tab::Errors => Tab::Dashboard }; app.refresh_filter_cache(); }
                                     (KeyCode::Char('1'), m) if !m.contains(KeyModifiers::ALT) => { app.state.current_tab = Tab::Dashboard; app.refresh_filter_cache(); }
                                     (KeyCode::Char('2'), m) if !m.contains(KeyModifiers::ALT) => { app.state.current_tab = Tab::App; app.refresh_filter_cache(); }
                                     (KeyCode::Char('3'), m) if !m.contains(KeyModifiers::ALT) => { app.state.current_tab = Tab::Build; app.refresh_filter_cache(); }
                                     (KeyCode::Char('4'), m) if !m.contains(KeyModifiers::ALT) => { app.state.current_tab = Tab::Errors; app.refresh_filter_cache(); }
-
                                     (KeyCode::Char('1'), m) if m.contains(KeyModifiers::ALT) => { app.state.min_log_level = LogLevel::Verbose; app.refresh_filter_cache(); }
                                     (KeyCode::Char('2'), m) if m.contains(KeyModifiers::ALT) => { app.state.min_log_level = LogLevel::Debug; app.refresh_filter_cache(); }
                                     (KeyCode::Char('3'), m) if m.contains(KeyModifiers::ALT) => { app.state.min_log_level = LogLevel::Info; app.refresh_filter_cache(); }
                                     (KeyCode::Char('4'), m) if m.contains(KeyModifiers::ALT) => { app.state.min_log_level = LogLevel::Warn; app.refresh_filter_cache(); }
                                     (KeyCode::Char('5'), m) if m.contains(KeyModifiers::ALT) => { app.state.min_log_level = LogLevel::Error; app.refresh_filter_cache(); }
-
-                                    (KeyCode::Char(c), _) => {
-                                        if let Some(cmd_str) = app.config.custom_commands.get(&c.to_ascii_lowercase()) {
-                                            let cmd = cmd_str.clone();
-                                            tokio::spawn(async move { let _ = tokio::process::Command::new("sh").args(["-c", &cmd]).status().await; });
-                                        }
-                                    }
+                                    (KeyCode::Char(c), _) => { if let Some(cmd_str) = app.config.custom_commands.get(&c.to_ascii_lowercase()) { let cmd = cmd_str.clone(); tokio::spawn(async move { let _ = tokio::process::Command::new("sh").args(["-c", &cmd]).status().await; }); } }
                                     _ => {}
                                 }
                             }
@@ -603,10 +504,8 @@ async fn main() -> Result<()> {
                                 match key.code {
                                     KeyCode::Enter => {
                                         let url = app.state.input_buffer.clone();
-                                        if let Some(ref s) = app.state.device_serial {
-                                            let s = s.clone();
-                                            tokio::spawn(async move { let _ = tokio::process::Command::new("adb").args(["-s", &s, "shell", "am", "start", "-d", &url]).status().await; });
-                                        }
+                                        let serials = app.get_target_serials().await;
+                                        tokio::spawn(async move { for s in serials { let _ = tokio::process::Command::new("adb").args(["-s", &s, "shell", "am", "start", "-d", &url]).status().await; } });
                                         app.state.mode = AppMode::Normal;
                                     }
                                     KeyCode::Esc => { app.state.mode = AppMode::Normal; }
@@ -635,12 +534,7 @@ async fn main() -> Result<()> {
                                  if let KeyCode::Char(c) = key.code { app.state.input_buffer.push(c); }
                                  if key.code == KeyCode::Backspace { app.state.input_buffer.pop(); }
                             }
-                            AppMode::Help | AppMode::Welcome => {
-                                 if key.code == KeyCode::Esc || key.code == KeyCode::Char('h') || key.code == KeyCode::Char('q') || key.code == KeyCode::Enter { 
-                                     if app.state.mode == AppMode::Welcome { let _ = app.config.save(); }
-                                     app.state.mode = AppMode::Normal; 
-                                 }
-                            }
+                            AppMode::Help | AppMode::Welcome => { if key.code == KeyCode::Esc || key.code == KeyCode::Char('h') || key.code == KeyCode::Char('q') || key.code == KeyCode::Enter { if app.state.mode == AppMode::Welcome { let _ = app.config.save(); } app.state.mode = AppMode::Normal; } }
                             AppMode::Settings => {
                                 match key.code {
                                     KeyCode::Esc | KeyCode::Char('q') => app.state.mode = AppMode::Normal,
@@ -664,28 +558,19 @@ async fn main() -> Result<()> {
                             }
                             AppMode::EmulatorSelect => {
                                 match key.code {
-                                    KeyCode::Esc | KeyCode::Char('q') => {
-                                        if app.state.device_serial.is_some() { app.state.mode = AppMode::Normal; } else { break; }
-                                    }
+                                    KeyCode::Esc | KeyCode::Char('q') => { if app.state.device_serial.is_some() { app.state.mode = AppMode::Normal; } else { break; } }
                                     KeyCode::Up | KeyCode::Char('k') => app.state.settings_index = app.state.settings_index.saturating_sub(1),
                                     KeyCode::Down | KeyCode::Char('j') => app.state.settings_index = (app.state.settings_index + 1).min(app.state.available_avds.len().saturating_sub(1)),
                                     KeyCode::Enter => {
                                         let avd = app.state.available_avds[app.state.settings_index].clone();
                                         let log_tx = tx_log.clone();
-                                        tokio::spawn(async move {
-                                            let _ = log_tx.send(format!("[info] launching emulator: {}...", avd));
-                                            let _ = commands::launch_emulator(&avd).await;
-                                        });
+                                        tokio::spawn(async move { let _ = log_tx.send(format!("[info] launching emulator: {}...", avd)); let _ = commands::launch_emulator(&avd).await; });
                                         app.state.mode = AppMode::Normal;
                                     }
                                     _ => {}
                                 }
                             }
-                            AppMode::NoHardwareHelp => {
-                                if key.code == KeyCode::Esc || key.code == KeyCode::Char('q') || key.code == KeyCode::Enter {
-                                    app.state.mode = AppMode::Normal;
-                                }
-                            }
+                            AppMode::NoHardwareHelp => { if key.code == KeyCode::Esc || key.code == KeyCode::Char('q') || key.code == KeyCode::Enter { app.state.mode = AppMode::Normal; } }
                         }
                     }
                 }
@@ -700,53 +585,29 @@ async fn main() -> Result<()> {
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
-    let popup_layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage((100 - percent_y) / 2), Constraint::Percentage(percent_y), Constraint::Percentage((100 - percent_y) / 2)])
-        .split(r);
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage((100 - percent_x) / 2), Constraint::Percentage(percent_x), Constraint::Percentage((100 - percent_x) / 2)])
-        .split(popup_layout[1])[1]
+    let popup_layout = Layout::default().direction(Direction::Vertical).constraints([Constraint::Percentage((100 - percent_y) / 2), Constraint::Percentage(percent_y), Constraint::Percentage((100 - percent_y) / 2)]).split(r);
+    Layout::default().direction(Direction::Horizontal).constraints([Constraint::Percentage((100 - percent_x) / 2), Constraint::Percentage(percent_x), Constraint::Percentage((100 - percent_x) / 2)]).split(popup_layout[1])[1]
 }
 
 fn ui(f: &mut ratatui::Frame, app: &mut App) {
     let area = f.area();
     f.render_widget(Clear, area);
-    
-    if area.height < 5 || area.width < 10 {
-        f.render_widget(Paragraph::new("Terminal too small").alignment(Alignment::Center), area);
-        return;
-    }
-
-    let mut main_constraints = vec![
-        Constraint::Length(2), // Dashboard info
-        Constraint::Length(3), // Tabs
-        Constraint::Min(0),    // Main Content
-        Constraint::Length(1), // Footer
-    ];
-    
+    if area.height < 5 || area.width < 10 { f.render_widget(Paragraph::new("Terminal too small").alignment(Alignment::Center), area); return; }
+    let mut main_constraints = vec![Constraint::Length(2), Constraint::Length(3), Constraint::Min(0), Constraint::Length(1)];
     if area.height < 15 { main_constraints.remove(0); }
     if area.height < 10 { main_constraints.remove(0); }
-
-    if app.state.mode == AppMode::Search || app.state.mode == AppMode::Input || app.state.mode == AppMode::DeepLink {
-        let insert_idx = if main_constraints.len() == 4 { 2 } else if main_constraints.len() == 3 { 1 } else { 0 };
-        main_constraints.insert(insert_idx, Constraint::Length(3));
-    }
-
+    if app.state.mode == AppMode::Search || app.state.mode == AppMode::Input || app.state.mode == AppMode::DeepLink { let insert_idx = if main_constraints.len() == 4 { 2 } else if main_constraints.len() == 3 { 1 } else { 0 }; main_constraints.insert(insert_idx, Constraint::Length(3)); }
     let chunks = Layout::default().direction(Direction::Vertical).constraints(main_constraints).split(area);
     let mut current_idx = 0;
 
     if area.height >= 15 {
-        let battery_span = match app.state.stats.battery_level {
-            Some(l) => Span::styled(format!("BAT:{}%", l), if l < 20 { Style::default().fg(Color::Red) } else { Style::default().fg(Color::Green) }),
-            None => Span::raw("BAT:--%").dark_gray(),
-        };
-
+        let battery_span = match app.state.stats.battery_level { Some(l) => Span::styled(format!("BAT:{}%", l), if l < 20 { Style::default().fg(Color::Red) } else { Style::default().fg(Color::Green) }), None => Span::raw("BAT:--%").dark_gray() };
+        let broadcast_span = if app.state.is_broadcast { Span::styled(" [BROADCAST] ", Style::default().bg(Color::Red).fg(Color::White).bold()) } else { Span::raw("") };
         let header_line = Line::from(vec![
             Span::styled(" DeckDriod ", Style::default().bold().fg(Color::Cyan)),
             Span::raw(format!("({}) ", app.state.device_serial.as_deref().unwrap_or("none"))),
             battery_span,
+            broadcast_span,
             Span::raw(" | Mouse:"), Span::raw(if app.state.mouse_captured { "APP" } else { "NATIVE" }).bold(),
             Span::raw(" | Watch:"), Span::raw(if app.state.auto_rebuild { "ON" } else { "OFF" }).bold(),
             Span::raw(" Open:"), Span::raw(if app.state.auto_open { "ON" } else { "OFF" }).bold(),
@@ -758,13 +619,7 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
 
     if area.height >= 10 {
         let tab_titles = vec![" [1] Dashboard ", " [2] App Logs ", " [3] Build ", " [4] Errors "];
-        let tabs = Tabs::new(tab_titles)
-            .block(Block::default().borders(Borders::ALL))
-            .select(match app.state.current_tab {
-                Tab::Dashboard => 0, Tab::App => 1, Tab::Build => 2, Tab::Errors => 3,
-            })
-            .style(Style::default().fg(Color::DarkGray))
-            .highlight_style(Style::default().fg(Color::Yellow).bold());
+        let tabs = Tabs::new(tab_titles).block(Block::default().borders(Borders::ALL)).select(match app.state.current_tab { Tab::Dashboard => 0, Tab::App => 1, Tab::Build => 2, Tab::Errors => 3 }).style(Style::default().fg(Color::DarkGray)).highlight_style(Style::default().fg(Color::Yellow).bold());
         f.render_widget(tabs, chunks[current_idx]);
         current_idx += 1;
     }
@@ -779,31 +634,21 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
 
     match app.state.current_tab {
         Tab::Dashboard => {
-            let dash_chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Length(7), Constraint::Min(0)])
-                .split(main_area);
-
+            let dash_chunks = Layout::default().direction(Direction::Vertical).constraints([Constraint::Length(7), Constraint::Min(0)]).split(main_area);
             let stats_layout = Layout::default().direction(Direction::Horizontal).constraints([Constraint::Percentage(50), Constraint::Percentage(50)]).split(dash_chunks[0]);
-            
             let truncate = |s: &str, max: usize| { if s.len() > max { format!("{}...", &s[..max.saturating_sub(3)]) } else { s.to_string() } };
-            
             let cpu_title = if let Some(ref t) = app.state.build_task { format!(" BUILD: {} ", truncate(t, (stats_layout[0].width as usize).saturating_sub(10))) } else { format!(" CPU: {:.1}% ", app.state.stats.last_cpu) };
             let mem_title = format!(" MEM: {:.1}% ", app.state.stats.last_mem);
-
             f.render_widget(Sparkline::default().block(Block::default().borders(Borders::ALL).title(cpu_title)).data(&app.state.stats.cpu_usage.iter().map(|&v| (v * 10.0) as u64).collect::<Vec<_>>()).style(Style::default().fg(Color::Green)), stats_layout[0]);
             f.render_widget(Sparkline::default().block(Block::default().borders(Borders::ALL).title(mem_title)).data(&app.state.stats.mem_usage.iter().map(|&v| (v * 10.0) as u64).collect::<Vec<_>>()).style(Style::default().fg(Color::Blue)), stats_layout[1]);
 
             let cmd_block = Block::default().borders(Borders::ALL).title(" Quick Commands ");
             let inner_cmd_area = cmd_block.inner(dash_chunks[1]);
             f.render_widget(cmd_block, dash_chunks[1]);
-
             let cmd_layout = Layout::default().direction(Direction::Horizontal).constraints([Constraint::Percentage(33), Constraint::Percentage(33), Constraint::Percentage(33)]).split(inner_cmd_area);
-            
             let col1 = vec![Line::from(vec![Span::styled(" [a/r/Ent] ", Style::default().fg(Color::Cyan).bold()), Span::raw("Build/Launch")]), Line::from(vec![Span::styled(" [v]       ", Style::default().fg(Color::Cyan).bold()), Span::raw("Record Video")]), Line::from(vec![Span::styled(" [x]       ", Style::default().fg(Color::Cyan).bold()), Span::raw("Clear Data")]), Line::from(vec![Span::styled(" [/]       ", Style::default().fg(Color::Cyan).bold()), Span::raw("Search")])];
-            let col2 = vec![Line::from(vec![Span::styled(" [L]       ", Style::default().fg(Color::Cyan).bold()), Span::raw("Launch Only")]), Line::from(vec![Span::styled(" [u]       ", Style::default().fg(Color::Cyan).bold()), Span::raw("Deep Link")]), Line::from(vec![Span::styled(" [c]       ", Style::default().fg(Color::Cyan).bold()), Span::raw("Clear Logs")]), Line::from(vec![Span::styled(" [m]       ", Style::default().fg(Color::Cyan).bold()), Span::raw("Mouse Toggle")])];
+            let col2 = vec![Line::from(vec![Span::styled(" [L]       ", Style::default().fg(Color::Cyan).bold()), Span::raw("Launch Only")]), Line::from(vec![Span::styled(" [u]       ", Style::default().fg(Color::Cyan).bold()), Span::raw("Deep Link")]), Line::from(vec![Span::styled(" [c]       ", Style::default().fg(Color::Cyan).bold()), Span::raw("Clear Logs")]), Line::from(vec![Span::styled(" [B]       ", Style::default().fg(Color::Cyan).bold()), Span::raw("Broadcast Toggle")])];
             let col3 = vec![Line::from(vec![Span::styled(" [s]       ", Style::default().fg(Color::Cyan).bold()), Span::raw("Screenshot")]), Line::from(vec![Span::styled(" [b]       ", Style::default().fg(Color::Cyan).bold()), Span::raw("Toggle Bounds")]), Line::from(vec![Span::styled(" [i]       ", Style::default().fg(Color::Cyan).bold()), Span::raw("Settings")]), Line::from(vec![Span::styled(" [E]       ", Style::default().fg(Color::Cyan).bold()), Span::raw("Emulators")])];
-
             f.render_widget(Paragraph::new(col1), cmd_layout[0]);
             f.render_widget(Paragraph::new(col2), cmd_layout[1]);
             f.render_widget(Paragraph::new(col3), cmd_layout[2]);
@@ -816,7 +661,6 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
             if scroll >= total && total > 0 { scroll = total.saturating_sub(1); }
             let end = (scroll + height).min(total);
             let visible = if scroll < total { &logs[scroll..end] } else { &[] };
-
             let lines: Vec<Line> = visible.iter().enumerate().map(|(i, l)| {
                 let idx = scroll + i;
                 let mut style = if l.contains("[err]") || l.contains("[build-err]") || l.contains(" E/") { Style::default().fg(Color::Red) } else if l.contains("[ok]") { Style::default().fg(Color::Green) } else if l.contains("[build]") || l.contains(" W/") { Style::default().fg(Color::Yellow) } else if l.contains(" I/") { Style::default().fg(Color::Cyan) } else { Style::default() };
@@ -832,36 +676,20 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
     f.render_widget(Paragraph::new(footer), chunks[chunks.len() - 1]);
 
     if app.state.mode == AppMode::Help || app.state.mode == AppMode::Welcome {
-        let area = centered_rect(70, 75, f.area());
+        let area = centered_rect(70, 80, f.area());
         f.render_widget(Clear, area);
         let title = if app.state.mode == AppMode::Welcome { " Welcome to DeckDriod! " } else { " Advanced Help " };
-        let help = vec![Line::from(vec![Span::styled("--- Controls ---", Style::default().bold())]), Line::from(vec![Span::styled(" a / r / Ent ", Style::default().fg(Color::Cyan)), Span::raw(": Build & Launch")]), Line::from(vec![Span::styled(" L           ", Style::default().fg(Color::Cyan)), Span::raw(": Launch Only")]), Line::from(vec![Span::styled(" E           ", Style::default().fg(Color::Cyan)), Span::raw(": Launch Emulator")]), Line::from(vec![Span::styled(" c           ", Style::default().fg(Color::Cyan)), Span::raw(": Clear Logs")]), Line::from(vec![Span::styled(" i           ", Style::default().fg(Color::Cyan)), Span::raw(": Settings")]), Line::from(vec![Span::styled(" s / v       ", Style::default().fg(Color::Cyan)), Span::raw(": Screenshot / Video")]), Line::from(vec![Span::styled(" y / A / C   ", Style::default().fg(Color::Cyan)), Span::raw(": Copy Line/All/Crash")]), Line::from(vec![Span::styled(" q / Esc     ", Style::default().fg(Color::Cyan)), Span::raw(": Close/Quit")])];
+        let help = vec![Line::from(vec![Span::styled("--- Controls ---", Style::default().bold())]), Line::from(vec![Span::styled(" a / r / Ent ", Style::default().fg(Color::Cyan)), Span::raw(": Build & Launch")]), Line::from(vec![Span::styled(" L           ", Style::default().fg(Color::Cyan)), Span::raw(": Launch Only")]), Line::from(vec![Span::styled(" E           ", Style::default().fg(Color::Cyan)), Span::raw(": Launch Emulator")]), Line::from(vec![Span::styled(" B           ", Style::default().fg(Color::Cyan)), Span::raw(": Broadcast Toggle (Run actions on ALL devices)")]), Line::from(vec![Span::styled(" c           ", Style::default().fg(Color::Cyan)), Span::raw(": Clear Logs")]), Line::from(vec![Span::styled(" i           ", Style::default().fg(Color::Cyan)), Span::raw(": Settings")]), Line::from(vec![Span::styled(" s / v       ", Style::default().fg(Color::Cyan)), Span::raw(": Screenshot / Video")]), Line::from(vec![Span::styled(" y / A / C   ", Style::default().fg(Color::Cyan)), Span::raw(": Copy Line/All/Crash")]), Line::from(vec![Span::styled(" e           ", Style::default().fg(Color::Cyan)), Span::raw(": Export logs to deckdriod_export.txt")]), Line::from(vec![Span::styled(" q / Esc     ", Style::default().fg(Color::Cyan)), Span::raw(": Close/Quit")])];
         f.render_widget(Paragraph::new(help).block(Block::default().borders(Borders::ALL).title(title).border_style(Style::default().fg(Color::Cyan))).wrap(Wrap { trim: true }), area);
     }
 
     if app.state.mode == AppMode::Settings || (app.state.mode == AppMode::Input && app.state.settings_index < 10) {
         let area = centered_rect(60, 50, f.area());
         f.render_widget(Clear, area);
-        
         let latency_str = format!("{:.1}", app.config.watch_latency);
         let gap_str = format!("{:.1}", app.config.rebuild_gap);
-        
-        let settings = vec![
-            ("App ID", &app.config.app_id),
-            ("Main Activity", &app.config.activity),
-            ("Watch Latency", &latency_str),
-            ("Build Gap", &gap_str),
-            ("Log Tag", &app.config.log_tag),
-            ("Project Path", &app.config.project_path),
-            ("Output Path", &app.config.output_path)
-        ];
-        
-        let items: Vec<ListItem> = settings.iter().enumerate().map(|(i, (label, val))| { 
-            let mut style = Style::default(); 
-            if i == app.state.settings_index { style = style.fg(Color::Yellow).bold(); } 
-            ListItem::new(Line::from(vec![Span::styled(format!("{:<20}: ", label), style), Span::raw(*val)])) 
-        }).collect();
-        
+        let settings = vec![("App ID", &app.config.app_id), ("Main Activity", &app.config.activity), ("Watch Latency", &latency_str), ("Build Gap", &gap_str), ("Log Tag", &app.config.log_tag), ("Project Path", &app.config.project_path), ("Output Path", &app.config.output_path)];
+        let items: Vec<ListItem> = settings.iter().enumerate().map(|(i, (label, val))| { let mut style = Style::default(); if i == app.state.settings_index { style = style.fg(Color::Yellow).bold(); } ListItem::new(Line::from(vec![Span::styled(format!("{:<20}: ", label), style), Span::raw(*val)])) }).collect();
         f.render_widget(List::new(items).block(Block::default().borders(Borders::ALL).title(" Project Settings ").border_style(Style::default().fg(Color::Yellow))), area);
         if app.state.mode == AppMode::Input { let input_area = centered_rect(50, 10, area); f.render_widget(Clear, input_area); f.render_widget(Paragraph::new(app.state.input_buffer.as_str()).block(Block::default().borders(Borders::ALL).title(" Edit ").border_style(Style::default().fg(Color::Yellow))), input_area); }
     }
