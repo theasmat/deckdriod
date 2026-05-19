@@ -11,16 +11,15 @@ pub struct Config {
     pub log_tag: String,
     pub project_path: String,
     pub output_path: String,
+    pub mcp_port: u16,
     pub custom_commands: HashMap<char, String>,
 }
 
 impl Config {
     fn get_config_path() -> PathBuf {
-        // First check current directory
         if Path::new(".deckdriodconfig").exists() {
             return PathBuf::from(".deckdriodconfig");
         }
-        // Then check home directory
         if let Some(mut home) = dirs::home_dir() {
             home.push(".deckdriodconfig");
             if home.exists() {
@@ -34,13 +33,13 @@ impl Config {
         let mut map = HashMap::new();
         let mut custom_commands = HashMap::new();
         
-        // Defaults
         map.insert("APP_ID".to_string(), "com.mfc.manager.kotlin.dev".to_string());
         map.insert("WATCH_LATENCY".to_string(), "1.0".to_string());
         map.insert("REBUILD_GAP".to_string(), "2.0".to_string());
         map.insert("LOG_TAG".to_string(), "".to_string());
         map.insert("PROJECT_PATH".to_string(), ".".to_string());
         map.insert("OUTPUT_PATH".to_string(), ".".to_string());
+        map.insert("MCP_PORT".to_string(), "3000".to_string());
 
         let config_path = Self::get_config_path();
 
@@ -61,22 +60,13 @@ impl Config {
         }
 
         let app_id = map.get("APP_ID").cloned().unwrap();
-        
-        let activity = map.get("ACTIVITY")
-            .cloned()
-            .unwrap_or_else(|| format!("{}/com.mfc.manager.android.MainActivity", app_id));
-            
-        let watch_latency = map.get("WATCH_LATENCY")
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(1.0);
-
-        let rebuild_gap = map.get("REBUILD_GAP")
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(2.0);
-
+        let activity = map.get("ACTIVITY").cloned().unwrap_or_else(|| format!("{}/com.mfc.manager.android.MainActivity", app_id));
+        let watch_latency = map.get("WATCH_LATENCY").and_then(|s| s.parse().ok()).unwrap_or(1.0);
+        let rebuild_gap = map.get("REBUILD_GAP").and_then(|s| s.parse().ok()).unwrap_or(2.0);
         let log_tag = map.get("LOG_TAG").cloned().unwrap_or_default();
         let project_path = map.get("PROJECT_PATH").cloned().unwrap_or_else(|| ".".to_string());
         let output_path = map.get("OUTPUT_PATH").cloned().unwrap_or_else(|| ".".to_string());
+        let mcp_port = map.get("MCP_PORT").and_then(|s| s.parse().ok()).unwrap_or(3000);
 
         Config {
             app_id,
@@ -86,14 +76,15 @@ impl Config {
             log_tag,
             project_path,
             output_path,
+            mcp_port,
             custom_commands,
         }
     }
 
     pub fn save(&self) -> std::io::Result<()> {
         let mut content = format!(
-            "APP_ID={}\nACTIVITY={}\nWATCH_LATENCY={:.1}\nREBUILD_GAP={:.1}\nLOG_TAG={}\nPROJECT_PATH={}\nOUTPUT_PATH={}\n",
-            self.app_id, self.activity, self.watch_latency, self.rebuild_gap, self.log_tag, self.project_path, self.output_path
+            "APP_ID={}\nACTIVITY={}\nWATCH_LATENCY={:.1}\nREBUILD_GAP={:.1}\nLOG_TAG={}\nPROJECT_PATH={}\nOUTPUT_PATH={}\nMCP_PORT={}\n",
+            self.app_id, self.activity, self.watch_latency, self.rebuild_gap, self.log_tag, self.project_path, self.output_path, self.mcp_port
         );
 
         for (key, val) in &self.custom_commands {

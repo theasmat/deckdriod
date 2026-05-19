@@ -17,13 +17,34 @@
 - **🚀 Automated "Smooth" Transitions:** Auto-switches to the Build tab on start and App tab on success.
 - **🚨 Advanced Crash Detection:** Automatically highlights fatal exceptions, captures the full stack trace, and saves it to `crash_report.txt`.
 - **📟 Smart Stack Traces:** Boilerplate lines are dimmed to make the root cause of an error stand out.
-- **✨ Structured Logging:** Pretty-prints JSON log payloads for modern app-side debugging.
+- **🤖 AI Integration (MCP):** Expose live logs and crashes to AI assistants like Claude or Gemini via the Model Context Protocol.
 - **🎥 Media Tools:** One-key screen recording and screenshots pulled directly to your specified output directory.
 - **🔗 Deep Link Tester:** Quickly test deep links without touching your phone.
 - **🛠 Layout Debugger:** Toggle system layout bounds with a single hotkey.
 - **🔋 Battery Monitor:** Real-time device battery level tracking.
 - **⌨️ Custom Hotkeys:** Map your own shell commands to hotkeys in `.deckdriodconfig`.
 - **🏗 Cross-Directory Support:** Run `deckdriod` from anywhere by specifying your project path.
+
+---
+
+## 🤖 AI Integration (MCP)
+
+DeckDriod supports the **Model Context Protocol (MCP)**, allowing AI assistants to directly analyze your Android logs and crashes.
+
+### How to use with Claude Desktop:
+1.  Open DeckDriod and press **`M`** (Shift+M) to start the MCP server. You will see `[MCP:3000]` in the header.
+2.  Add DeckDriod to your `claude_desktop_config.json`:
+    ```json
+    {
+      "mcpServers": {
+        "deckdriod": {
+          "command": "curl",
+          "args": ["-s", "http://localhost:3000/sse"]
+        }
+      }
+    }
+    ```
+3.  Restart Claude. It can now use tools like `get_recent_logs`, `get_errors`, and `get_latest_crash` to help you debug!
 
 ---
 
@@ -68,6 +89,7 @@ Simply run `deckdriod` in the root of your project, or configure a `PROJECT_PATH
 | `L` | **Launch Only**: Restarts the app without rebuilding. |
 | `B` (Shift+b) | **Broadcast Toggle**: Run commands on **ALL** connected devices. |
 | `E` | **Emulator Selector**: Select and launch an Android emulator. |
+| `M` (Shift+m) | **MCP Toggle**: Enable/Disable AI log analysis server. |
 | `e` | **Export Logs**: Save current log buffer to `deckdriod_export.txt`. |
 | `/` | Search Logs (Substring matching) |
 | `h` | Open Advanced Help Popup |
@@ -101,6 +123,7 @@ WATCH_LATENCY=1.0
 REBUILD_GAP=2.0
 PROJECT_PATH=/path/to/your/kotlin/project
 OUTPUT_PATH=/path/to/screenshots/folder
+MCP_PORT=3000
 
 # Custom hotkeys (DECKDRIOD_CMD_<key>=command)
 DECKDRIOD_CMD_T="adb shell input text 'testuser'"

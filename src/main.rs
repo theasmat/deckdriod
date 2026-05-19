@@ -215,6 +215,7 @@ async fn main() -> Result<()> {
 
     let config = Config::load();
     let mut state = AppState::default();
+    state.mcp_port = config.mcp_port;
 
     if !std::path::Path::new(".deckdriodconfig").exists() {
         state.mode = AppMode::Welcome;
@@ -315,7 +316,6 @@ async fn main() -> Result<()> {
                         app.state.current_tab = Tab::App;
                         app.state.autoscroll = true;
                         app.refresh_filter_cache();
-                        
                         let mut shared = app.state.shared_logs.write().unwrap();
                         shared.build_status = "Success".to_string();
                     }
@@ -484,9 +484,7 @@ async fn main() -> Result<()> {
                                     }
                                     (KeyCode::Char('d'), _) => {
                                         let serials = app.get_target_serials().await;
-                                        tokio::spawn(async move {
-                                            for s in serials { let _ = tokio::process::Command::new("adb").args(["-s", &s, "shell", "input", "keyevent", "82"]).status().await; }
-                                        });
+                                        tokio::spawn(async move { for s in serials { let _ = tokio::process::Command::new("adb").args(["-s", &s, "shell", "input", "keyevent", "82"]).status().await; } });
                                     }
                                     (KeyCode::Char('/'), _) => { app.state.mode = AppMode::Search; app.state.input_buffer.clear(); }
                                     (KeyCode::Up, _) | (KeyCode::Char('k'), _) => { app.state.autoscroll = false; app.state.log_scroll = app.state.log_scroll.saturating_sub(1); }
@@ -558,6 +556,7 @@ async fn main() -> Result<()> {
                                          4 => { app.config.log_tag = val; app.refresh_filter_cache(); },
                                          5 => app.config.project_path = val,
                                          6 => app.config.output_path = val,
+                                         7 => if let Ok(v) = val.parse() { app.config.mcp_port = v; app.state.mcp_port = v; },
                                          _ => {}
                                      }
                                      let _ = app.config.save();
@@ -571,7 +570,7 @@ async fn main() -> Result<()> {
                                 match key.code {
                                     KeyCode::Esc | KeyCode::Char('q') => app.state.mode = AppMode::Normal,
                                     KeyCode::Up | KeyCode::Char('k') => app.state.settings_index = app.state.settings_index.saturating_sub(1),
-                                    KeyCode::Down | KeyCode::Char('j') => app.state.settings_index = (app.state.settings_index + 1).min(6),
+                                    KeyCode::Down | KeyCode::Char('j') => app.state.settings_index = (app.state.settings_index + 1).min(7),
                                     KeyCode::Enter => {
                                         app.state.mode = AppMode::Input; app.state.input_buffer.clear();
                                         match app.state.settings_index {
@@ -582,6 +581,7 @@ async fn main() -> Result<()> {
                                             4 => app.state.input_buffer = app.config.log_tag.clone(),
                                             5 => app.state.input_buffer = app.config.project_path.clone(),
                                             6 => app.state.input_buffer = app.config.output_path.clone(),
+                                            7 => app.state.input_buffer = app.state.mcp_port.to_string(),
                                             _ => {}
                                         }
                                     }
@@ -723,7 +723,8 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
         f.render_widget(Clear, area);
         let latency_str = format!("{:.1}", app.config.watch_latency);
         let gap_str = format!("{:.1}", app.config.rebuild_gap);
-        let settings = vec![("App ID", &app.config.app_id), ("Main Activity", &app.config.activity), ("Watch Latency", &latency_str), ("Build Gap", &gap_str), ("Log Tag", &app.config.log_tag), ("Project Path", &app.config.project_path), ("Output Path", &app.config.output_path)];
+        let mcp_port_str = app.state.mcp_port.to_string();
+        let settings = vec![("App ID", &app.config.app_id), ("Main Activity", &app.config.activity), ("Watch Latency", &latency_str), ("Build Gap", &gap_str), ("Log Tag", &app.config.log_tag), ("Project Path", &app.config.project_path), ("Output Path", &app.config.output_path), ("MCP Port", &mcp_port_str)];
         let items: Vec<ListItem> = settings.iter().enumerate().map(|(i, (label, val))| { let mut style = Style::default(); if i == app.state.settings_index { style = style.fg(Color::Yellow).bold(); } ListItem::new(Line::from(vec![Span::styled(format!("{:<20}: ", label), style), Span::raw(*val)])) }).collect();
         f.render_widget(List::new(items).block(Block::default().borders(Borders::ALL).title(" Project Settings ").border_style(Style::default().fg(Color::Yellow))), area);
         if app.state.mode == AppMode::Input { let input_area = centered_rect(50, 10, area); f.render_widget(Clear, input_area); f.render_widget(Paragraph::new(app.state.input_buffer.as_str()).block(Block::default().borders(Borders::ALL).title(" Edit ").border_style(Style::default().fg(Color::Yellow))), input_area); }
