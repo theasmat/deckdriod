@@ -10,6 +10,8 @@ pub enum AppMode {
     Help,
     Welcome,
     Settings,
+    EmulatorSelect,
+    NoHardwareHelp,
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -71,6 +73,7 @@ pub struct AppState {
     pub show_layout_bounds: bool,
     pub last_rebuild_at: Option<std::time::Instant>,
     pub settings_index: usize,
+    pub available_avds: Vec<String>,
     pub log_scroll: usize,
     pub mouse_captured: bool,
     pub selection_start: Option<usize>,
@@ -100,6 +103,7 @@ impl Default for AppState {
             show_layout_bounds: false,
             last_rebuild_at: None,
             settings_index: 0,
+            available_avds: Vec::new(),
             log_scroll: 0,
             mouse_captured: true,
             selection_start: None,

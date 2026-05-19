@@ -212,9 +212,15 @@ async fn main() -> Result<()> {
         state.mode = AppMode::Welcome;
     }
 
-    let devices = commands::get_devices().await?;
+    let devices = commands::get_devices().await.unwrap_or_default();
     if devices.is_empty() {
-        anyhow::bail!("no devices connected");
+        let avds = commands::get_avds().await.unwrap_or_default();
+        if avds.is_empty() {
+            state.mode = AppMode::NoHardwareHelp;
+        } else {
+            state.available_avds = avds;
+            state.mode = AppMode::EmulatorSelect;
+        }
     } else if devices.len() == 1 {
         state.device_serial = Some(devices[0].clone());
     } else {
@@ -225,8 +231,6 @@ async fn main() -> Result<()> {
         let idx: usize = input.trim().parse().unwrap_or(1);
         state.device_serial = Some(devices.get(idx - 1).unwrap_or(&devices[0]).clone());
     }
-
-    let serial = state.device_serial.as_ref().unwrap().clone();
 
     enable_raw_mode()?;
     let mut stdout = stdout();
@@ -244,25 +248,28 @@ async fn main() -> Result<()> {
 
     let _watcher = watcher::start_watcher(app.config.watch_latency, tx_watch)?;
 
-    let stats_serial = serial.clone();
-    let stats_app_id = app.config.app_id.clone();
-    tokio::spawn(stats::start_stats_polling(stats_serial, stats_app_id, tx_stats));
-
     let mut log_manager = LogcatManager::new();
-    if app.state.show_logs {
-        log_manager.start(&serial, &app.config.app_id, tx_log.clone()).await?;
+    let recorder = Arc::new(Mutex::new(commands::Recorder::new()));
+
+    if let Some(ref serial) = app.state.device_serial {
+        let stats_serial = serial.clone();
+        let stats_app_id = app.config.app_id.clone();
+        tokio::spawn(stats::start_stats_polling(stats_serial, stats_app_id, tx_stats.clone()));
+
+        if app.state.show_logs {
+            log_manager.start(serial, &app.config.app_id, tx_log.clone()).await?;
+        }
+
+        let build_tx = tx_log.clone();
+        let build_evt_tx = tx_build.clone();
+        let cfg_bg = app.config.clone();
+        let st_bg = app.state.clone();
+        tokio::spawn(async move {
+            let _ = commands::build_and_launch(&cfg_bg, &st_bg, build_tx, build_evt_tx).await;
+        });
     }
 
-    let build_tx = tx_log.clone();
-    let build_evt_tx = tx_build.clone();
-    let cfg_bg = app.config.clone();
-    let st_bg = app.state.clone();
-    tokio::spawn(async move {
-        let _ = commands::build_and_launch(&cfg_bg, &st_bg, build_tx, build_evt_tx).await;
-    });
-
     let mut interval = tokio::time::interval(std::time::Duration::from_millis(100));
-    let recorder = Arc::new(Mutex::new(commands::Recorder::new()));
     let mut last_draw = std::time::Instant::now();
 
     loop {
@@ -273,8 +280,24 @@ async fn main() -> Result<()> {
 
         tokio::select! {
             _ = interval.tick() => {
-                if app.state.show_logs && !log_manager.check_status().await {
-                    let _ = log_manager.start(&serial, &app.config.app_id, tx_log.clone()).await;
+                if let Some(ref serial) = app.state.device_serial {
+                    if app.state.show_logs && !log_manager.check_status().await {
+                        let _ = log_manager.start(serial, &app.config.app_id, tx_log.clone()).await;
+                    }
+                } else {
+                    // Try to auto-connect to the first available device if we don't have one
+                    if let Ok(devs) = commands::get_devices().await {
+                        if !devs.is_empty() {
+                            let serial = devs[0].clone();
+                            app.state.device_serial = Some(serial.clone());
+                            let stats_serial = serial.clone();
+                            let stats_app_id = app.config.app_id.clone();
+                            tokio::spawn(stats::start_stats_polling(stats_serial, stats_app_id, tx_stats.clone()));
+                            if app.state.show_logs {
+                                let _ = log_manager.start(&serial, &app.config.app_id, tx_log.clone()).await;
+                            }
+                        }
+                    }
                 }
             }
             Some(log) = rx_log.recv() => { app.add_log(log); }
@@ -410,7 +433,9 @@ async fn main() -> Result<()> {
                                         app.logs.clear(); app.cache_all.clear(); app.cache_app.clear(); app.cache_build.clear(); app.cache_err.clear();
                                         app.state.last_crash = None; app.state.search_query.clear();
                                         app.state.log_scroll = 0;
-                                        log_manager.start(&serial, &app.config.app_id, tx_log.clone()).await?;
+                                        if let Some(ref serial) = app.state.device_serial {
+                                            log_manager.start(serial, &app.config.app_id, tx_log.clone()).await?;
+                                        }
                                     }
                                     (KeyCode::Char('h'), _) => { app.state.mode = AppMode::Help; }
                                     (KeyCode::Char('i'), _) => { app.state.mode = AppMode::Settings; app.state.settings_index = 0; }
@@ -418,7 +443,11 @@ async fn main() -> Result<()> {
                                     (KeyCode::Char('o'), _) => { app.state.auto_open = !app.state.auto_open; }
                                     (KeyCode::Char('l'), _) => {
                                         app.state.show_logs = !app.state.show_logs;
-                                        if app.state.show_logs { log_manager.start(&serial, &app.config.app_id, tx_log.clone()).await?; } else { log_manager.stop(); }
+                                        if app.state.show_logs { 
+                                            if let Some(ref serial) = app.state.device_serial {
+                                                log_manager.start(serial, &app.config.app_id, tx_log.clone()).await?; 
+                                            }
+                                        } else { log_manager.stop(); }
                                     }
                                     (KeyCode::Char('L'), _) => {
                                         app.state.current_tab = Tab::App;
@@ -429,6 +458,17 @@ async fn main() -> Result<()> {
                                         let st = app.state.clone();
                                         tokio::spawn(async move { let _ = commands::launch_app(&cfg, &st, log_tx).await; });
                                     }
+                                    (KeyCode::Char('E'), _) => {
+                                        if let Ok(avds) = commands::get_avds().await {
+                                            if !avds.is_empty() {
+                                                app.state.available_avds = avds;
+                                                app.state.mode = AppMode::EmulatorSelect;
+                                                app.state.settings_index = 0;
+                                            } else {
+                                                let _ = tx_log.send("[err] no emulators found".to_string());
+                                            }
+                                        }
+                                    }
                                     (KeyCode::Char('s'), _) => {
                                         let log_tx = tx_log.clone();
                                         let cfg = app.config.clone();
@@ -437,23 +477,25 @@ async fn main() -> Result<()> {
                                     }
                                     (KeyCode::Char('v'), _) => {
                                         let rec = Arc::clone(&recorder);
-                                        let s = serial.clone();
-                                        let log_tx = tx_log.clone();
-                                        let cfg = app.config.clone();
-                                        if app.state.is_recording {
-                                            app.state.is_recording = false;
-                                            tokio::spawn(async move {
-                                                let mut r = rec.lock().await;
-                                                let _ = r.stop(&cfg, &s, log_tx).await;
-                                            });
-                                        } else {
-                                            app.state.is_recording = true;
-                                            tokio::spawn(async move {
-                                                let mut r = rec.lock().await;
-                                                if let Ok(_) = r.start(&s).await {
-                                                    let _ = log_tx.send("[info] recording started...".to_string());
-                                                }
-                                            });
+                                        if let Some(ref serial) = app.state.device_serial {
+                                            let s = serial.clone();
+                                            let log_tx = tx_log.clone();
+                                            let cfg = app.config.clone();
+                                            if app.state.is_recording {
+                                                app.state.is_recording = false;
+                                                tokio::spawn(async move {
+                                                    let mut r = rec.lock().await;
+                                                    let _ = r.stop(&cfg, &s, log_tx).await;
+                                                });
+                                            } else {
+                                                app.state.is_recording = true;
+                                                tokio::spawn(async move {
+                                                    let mut r = rec.lock().await;
+                                                    if let Ok(_) = r.start(&s).await {
+                                                        let _ = log_tx.send("[info] recording started...".to_string());
+                                                    }
+                                                });
+                                            }
                                         }
                                     }
                                     (KeyCode::Char('b'), _) => { let _ = commands::toggle_layout_bounds(&mut app.state).await; }
@@ -465,10 +507,12 @@ async fn main() -> Result<()> {
                                         tokio::spawn(async move { let _ = commands::clear_app_data(&cfg, &st, log_tx).await; });
                                     }
                                     (KeyCode::Char('d'), _) => {
-                                        let s = serial.clone();
-                                        tokio::spawn(async move {
-                                            let _ = tokio::process::Command::new("adb").args(["-s", &s, "shell", "input", "keyevent", "82"]).status().await;
-                                        });
+                                        if let Some(ref s) = app.state.device_serial {
+                                            let s = s.clone();
+                                            tokio::spawn(async move {
+                                                let _ = tokio::process::Command::new("adb").args(["-s", &s, "shell", "input", "keyevent", "82"]).status().await;
+                                            });
+                                        }
                                     }
                                     (KeyCode::Char('/'), _) => { app.state.mode = AppMode::Search; app.state.input_buffer.clear(); }
                                     (KeyCode::Up, _) | (KeyCode::Char('k'), _) => {
@@ -583,8 +627,10 @@ async fn main() -> Result<()> {
                                 match key.code {
                                     KeyCode::Enter => {
                                         let url = app.state.input_buffer.clone();
-                                        let s = serial.clone();
-                                        tokio::spawn(async move { let _ = tokio::process::Command::new("adb").args(["-s", &s, "shell", "am", "start", "-d", &url]).status().await; });
+                                        if let Some(ref s) = app.state.device_serial {
+                                            let s = s.clone();
+                                            tokio::spawn(async move { let _ = tokio::process::Command::new("adb").args(["-s", &s, "shell", "am", "start", "-d", &url]).status().await; });
+                                        }
                                         app.state.mode = AppMode::Normal;
                                     }
                                     KeyCode::Esc => { app.state.mode = AppMode::Normal; }
@@ -638,6 +684,34 @@ async fn main() -> Result<()> {
                                         }
                                     }
                                     _ => {}
+                                }
+                            }
+                            AppMode::EmulatorSelect => {
+                                match key.code {
+                                    KeyCode::Esc | KeyCode::Char('q') => {
+                                        if app.state.device_serial.is_some() {
+                                            app.state.mode = AppMode::Normal;
+                                        } else {
+                                            break;
+                                        }
+                                    }
+                                    KeyCode::Up | KeyCode::Char('k') => app.state.settings_index = app.state.settings_index.saturating_sub(1),
+                                    KeyCode::Down | KeyCode::Char('j') => app.state.settings_index = (app.state.settings_index + 1).min(app.state.available_avds.len().saturating_sub(1)),
+                                    KeyCode::Enter => {
+                                        let avd = app.state.available_avds[app.state.settings_index].clone();
+                                        let log_tx = tx_log.clone();
+                                        tokio::spawn(async move {
+                                            let _ = log_tx.send(format!("[info] launching emulator: {}...", avd));
+                                            let _ = commands::launch_emulator(&avd).await;
+                                        });
+                                        app.state.mode = AppMode::Normal;
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            AppMode::NoHardwareHelp => {
+                                if key.code == KeyCode::Esc || key.code == KeyCode::Char('q') || key.code == KeyCode::Enter {
+                                    app.state.mode = AppMode::Normal;
                                 }
                             }
                         }
@@ -800,6 +874,7 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
                 Line::from(vec![Span::styled(" [x]         ", Style::default().fg(Color::Cyan).bold()), Span::raw("Clear Data  "), Span::styled("   [c] ", Style::default().fg(Color::Cyan).bold()), Span::raw("Clear Logs  "), Span::styled("      [i] ", Style::default().fg(Color::Cyan).bold()), Span::raw("Settings")]),
                 Line::from(vec![Span::styled(" [/]         ", Style::default().fg(Color::Cyan).bold()), Span::raw("Search      "), Span::styled("   [m] ", Style::default().fg(Color::Cyan).bold()), Span::raw("Mouse Toggle "), Span::styled("      [A] ", Style::default().fg(Color::Cyan).bold()), Span::raw("Yank All Logs")]),
                 Line::from(vec![Span::styled(" [y]         ", Style::default().fg(Color::Cyan).bold()), Span::raw("Yank Line   "), Span::styled("   [C] ", Style::default().fg(Color::Cyan).bold()), Span::raw("Yank Crash   "), Span::styled("      [q] ", Style::default().fg(Color::Cyan).bold()), Span::raw("Quit")]),
+                Line::from(vec![Span::styled(" [E]         ", Style::default().fg(Color::Cyan).bold()), Span::raw("Emulators   "), Span::raw("                                                         ")]),
                 Line::from(vec![Span::raw("")]),
                 Line::from(vec![Span::styled(" Log Levels: ", Style::default().bold()), Span::raw("Alt + [1]Verbose [2]Debug [3]Info [4]Warn [5]Error")]),
                 Line::from(vec![Span::styled(" Scrolling:  ", Style::default().bold()), Span::raw("Mouse Wheel, Up/Down, PageUp/Down, [G] Follow Bottom")]),
@@ -891,6 +966,7 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
             Line::from(vec![Span::styled("--- Controls ---", Style::default().bold())]),
             Line::from(vec![Span::styled(" a / r / Ent ", Style::default().fg(Color::Cyan)), Span::raw(": Build & Launch")]),
             Line::from(vec![Span::styled(" L           ", Style::default().fg(Color::Cyan)), Span::raw(": Launch Only (Skip Build)")]),
+            Line::from(vec![Span::styled(" E           ", Style::default().fg(Color::Cyan)), Span::raw(": Launch Emulator")]),
             Line::from(vec![Span::styled(" c           ", Style::default().fg(Color::Cyan)), Span::raw(": Clear Logs & Crash Alert")]),
             Line::from(vec![Span::styled(" i         ", Style::default().fg(Color::Cyan)), Span::raw(": Open Settings Menu")]),
             Line::from(vec![Span::styled(" Alt + 1-5 ", Style::default().fg(Color::Cyan)), Span::raw(": Set Min Log Level")]),
@@ -899,7 +975,7 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
             Line::from(vec![Span::styled(" m         ", Style::default().fg(Color::Cyan)), Span::raw(": Toggle Mouse (Capture vs Native Selection)")]),
             Line::from(vec![Span::styled(" y         ", Style::default().fg(Color::Cyan)), Span::raw(": Yank (Copy) top line")]),
             Line::from(vec![Span::styled(" A         ", Style::default().fg(Color::Cyan)), Span::raw(": Yank (Copy) ALL visible logs")]),
-            Line::from(vec![Span::styled(" C         ", Style::default().fg(Color::Cyan)), Span::raw(": Yank (Copy) last Crash Trace")]),
+            Line::from(vec![Span::styled(" C         ", Style::default().fg(Color::Cyan)), Span::raw(": Yank (Copy) last crash trace")]),
 
             Line::from(vec![Span::raw("")]),
             Line::from(vec![Span::styled(" Tip: ", Style::default().fg(Color::Yellow).bold()), Span::raw("Hold Option (Mac) or Shift (Linux) for native selection while in APP mouse mode.")]),
@@ -939,5 +1015,39 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
             f.render_widget(Clear, input_area);
             f.render_widget(Paragraph::new(app.state.input_buffer.as_str()).block(Block::default().borders(Borders::ALL).title(" Edit Value ").border_style(Style::default().fg(Color::Yellow))), input_area);
         }
+    }
+
+    if app.state.mode == AppMode::EmulatorSelect {
+        let area = centered_rect(60, 40, f.area());
+        f.render_widget(Clear, area);
+        let items: Vec<ListItem> = app.state.available_avds.iter().enumerate().map(|(i, name)| {
+            let mut style = Style::default();
+            if i == app.state.settings_index { style = style.fg(Color::Yellow).bold(); }
+            ListItem::new(Line::from(vec![Span::styled(format!("> {}", name), style)]))
+        }).collect();
+        f.render_widget(List::new(items).block(Block::default().borders(Borders::ALL).title(" Select Emulator ").border_style(Style::default().fg(Color::Yellow))), area);
+    }
+
+    if app.state.mode == AppMode::NoHardwareHelp {
+        let area = centered_rect(70, 60, f.area());
+        f.render_widget(Clear, area);
+        let help_text = vec![
+            Line::from(vec![Span::styled(" No Android Devices Detected ", Style::default().fg(Color::Red).bold())]),
+            Line::from(vec![Span::raw("")]),
+            Line::from(vec![Span::styled("To use DeckDriod, please either:", Style::default().bold())]),
+            Line::from(vec![Span::raw("1. Connect a physical Android device via USB.")]),
+            Line::from(vec![Span::raw("2. Create an Android Virtual Device (AVD).")]),
+            Line::from(vec![Span::raw("")]),
+            Line::from(vec![Span::styled("--- How to create an Emulator ---", Style::default().bold())]),
+            Line::from(vec![Span::raw("If you have Android Studio installed:")]),
+            Line::from(vec![Span::raw("   - Open 'Device Manager' and click 'Create Device'.")]),
+            Line::from(vec![Span::raw("")]),
+            Line::from(vec![Span::raw("If you use the command line:")]),
+            Line::from(vec![Span::styled("   sdkmanager ", Style::default().fg(Color::Cyan)), Span::raw("\"system-images;android-33;google_apis;arm64-v8a\"")]),
+            Line::from(vec![Span::styled("   avdmanager ", Style::default().fg(Color::Cyan)), Span::raw("create avd -n MyDevice -k \"system-images;android-33;google_apis;arm64-v8a\"")]),
+            Line::from(vec![Span::raw("")]),
+            Line::from(vec![Span::styled("Press Esc to enter dashboard anyway.", Style::default().dark_gray())]),
+        ];
+        f.render_widget(Paragraph::new(help_text).block(Block::default().borders(Borders::ALL).title(" Hardware Help ").border_style(Style::default().fg(Color::Red))).wrap(Wrap { trim: true }), area);
     }
 }

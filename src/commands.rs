@@ -39,6 +39,33 @@ pub async fn get_devices() -> Result<Vec<String>> {
     Ok(devices)
 }
 
+pub async fn get_avds() -> Result<Vec<String>> {
+    let output = Command::new("emulator")
+        .arg("-list-avds")
+        .stdin(Stdio::null())
+        .output()
+        .await?;
+    
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let avds: Vec<String> = stdout.lines()
+        .map(|line| line.trim().to_string())
+        .filter(|line| !line.is_empty())
+        .collect();
+    
+    Ok(avds)
+}
+
+pub async fn launch_emulator(avd_name: &str) -> Result<()> {
+    Command::new("emulator")
+        .arg("-avd")
+        .arg(avd_name)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+    Ok(())
+}
+
 pub async fn build_and_launch(
     config: &Config, 
     state: &AppState, 
