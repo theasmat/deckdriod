@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 use std::time::Duration;
 use std::sync::{Arc, RwLock};
+use ratatui::layout::Rect;
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum AppMode {
@@ -52,7 +53,6 @@ pub enum Tab {
     Errors,
 }
 
-/// Thread-safe shared state for MCP server
 #[derive(Default)]
 pub struct SharedLogState {
     pub app_logs: Vec<String>,
@@ -87,10 +87,12 @@ pub struct AppState {
     pub available_avds: Vec<String>,
     pub log_scroll: usize,
     pub mouse_captured: bool,
+    
+    // Selection Engine
     pub selection_start: Option<usize>,
     pub selection_end: Option<usize>,
+    pub log_area_rect: Rect,
     
-    // MCP State
     pub mcp_server_active: bool,
     pub mcp_port: u16,
     pub shared_logs: Arc<RwLock<SharedLogState>>,
@@ -125,6 +127,7 @@ impl Default for AppState {
             mouse_captured: true,
             selection_start: None,
             selection_end: None,
+            log_area_rect: Rect::default(),
             mcp_server_active: false,
             mcp_port: 3000,
             shared_logs: Arc::new(RwLock::new(SharedLogState::default())),

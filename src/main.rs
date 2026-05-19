@@ -62,19 +62,16 @@ impl App {
         
         let l = log.trim().to_string();
 
-        // Sync with MCP Shared State
         {
             let mut shared = self.state.shared_logs.write().unwrap();
             shared.app_logs.push(l.clone());
             if shared.app_logs.len() > 1000 { shared.app_logs.remove(0); }
         }
 
-        // 1. Crash Capture
         if l.contains("FATAL EXCEPTION") || l.contains("AndroidRuntime:E") {
             self.state.last_crash = Some(l.clone());
             self.state.last_crash_trace = Some(l.clone());
             self.state.is_capturing_crash = true;
-            
             let mut shared = self.state.shared_logs.write().unwrap();
             shared.last_crash = Some(l.clone());
         } else if self.state.is_capturing_crash {
@@ -82,7 +79,6 @@ impl App {
                 if let Some(ref mut trace) = self.state.last_crash_trace {
                     trace.push('\n');
                     trace.push_str(&l);
-                    
                     let mut shared = self.state.shared_logs.write().unwrap();
                     shared.last_crash = Some(trace.clone());
                 }
@@ -94,7 +90,6 @@ impl App {
             }
         }
 
-        // 2. Structured App Logging
         let mut logs_to_add = Vec::new();
         if l.contains("[DeckDriod]") {
             if let Some(json_start) = l.find('{') {
@@ -109,16 +104,13 @@ impl App {
             }
         }
 
-        if logs_to_add.is_empty() {
-            logs_to_add.push(l);
-        }
+        if logs_to_add.is_empty() { logs_to_add.push(l); }
 
         for entry in logs_to_add {
             self.logs.push_back(entry.clone());
             if self.matches_filter(&entry) {
                 self.cache_all.push(entry.clone());
                 if self.cache_all.len() > 5000 { self.cache_all.remove(0); }
-                
                 if entry.contains("[build]") || entry.contains("[build-err]") {
                     self.cache_build.push(entry.clone());
                     if self.cache_build.len() > 5000 { self.cache_build.remove(0); }
@@ -126,11 +118,9 @@ impl App {
                     self.cache_app.push(entry.clone());
                     if self.cache_app.len() > 5000 { self.cache_app.remove(0); }
                 }
-
                 if entry.contains(" E/") || entry.contains("[err]") || entry.contains("[build-err]") || entry.contains(" FATAL") {
                     self.cache_err.push(entry.clone());
                     if self.cache_err.len() > 5000 { self.cache_err.remove(0); }
-                    
                     let mut shared = self.state.shared_logs.write().unwrap();
                     shared.error_logs.push(entry.clone());
                     if shared.error_logs.len() > 500 { shared.error_logs.remove(0); }
@@ -153,15 +143,11 @@ impl App {
     }
 
     fn matches_filter(&self, log: &str) -> bool {
-        if !self.config.log_tag.is_empty() {
-            if !log.contains(&self.config.log_tag) { return false; }
-        }
+        if !self.config.log_tag.is_empty() && !log.contains(&self.config.log_tag) { return false; }
         if let Some(level) = LogLevel::from_str(log) {
             if (level as u8) < (self.state.min_log_level as u8) { return false; }
         }
-        if !self.state.search_query.is_empty() {
-            if !log.to_lowercase().contains(&self.state.search_query.to_lowercase()) { return false; }
-        }
+        if !self.state.search_query.is_empty() && !log.to_lowercase().contains(&self.state.search_query.to_lowercase()) { return false; }
         true
     }
 
@@ -185,11 +171,8 @@ impl App {
     }
 
     async fn get_target_serials(&self) -> Vec<String> {
-        if self.state.is_broadcast {
-            commands::get_devices().await.unwrap_or_default()
-        } else {
-            self.state.device_serial.as_ref().map(|s| vec![s.clone()]).unwrap_or_default()
-        }
+        if self.state.is_broadcast { commands::get_devices().await.unwrap_or_default() } 
+        else { self.state.device_serial.as_ref().map(|s| vec![s.clone()]).unwrap_or_default() }
     }
 }
 
@@ -201,10 +184,7 @@ async fn main() -> Result<()> {
             "-v" | "--version" => { println!("deckdriod v{}", env!("CARGO_PKG_VERSION")); return Ok(()); }
             "update" => {
                 println!("Updating deckdriod...");
-                let status = std::process::Command::new("sh")
-                    .arg("-c")
-                    .arg("set -o pipefail; curl -sSf https://raw.githubusercontent.com/theasmat/deckdriod/master/install.sh | sh")
-                    .status()?;
+                let status = std::process::Command::new("sh").arg("-c").arg("set -o pipefail; curl -sSf https://raw.githubusercontent.com/theasmat/deckdriod/master/install.sh | sh").status()?;
                 if status.success() { println!("\n✅ Update successful!"); } 
                 else { eprintln!("\n❌ Update failed. Check your internet connection."); std::process::exit(1); }
                 return Ok(());
@@ -217,9 +197,7 @@ async fn main() -> Result<()> {
     let mut state = AppState::default();
     state.mcp_port = config.mcp_port;
 
-    if !std::path::Path::new(".deckdriodconfig").exists() {
-        state.mode = AppMode::Welcome;
-    }
+    if !std::path::Path::new(".deckdriodconfig").exists() { state.mode = AppMode::Welcome; }
 
     let devices = commands::get_devices().await.unwrap_or_default();
     if devices.is_empty() {
@@ -319,11 +297,7 @@ async fn main() -> Result<()> {
                         let mut shared = app.state.shared_logs.write().unwrap();
                         shared.build_status = "Success".to_string();
                     }
-                    BuildEvent::Failed => { 
-                        app.state.build_task = None; 
-                        let mut shared = app.state.shared_logs.write().unwrap();
-                        shared.build_status = "Failed".to_string();
-                    }
+                    BuildEvent::Failed => { app.state.build_task = None; let mut shared = app.state.shared_logs.write().unwrap(); shared.build_status = "Failed".to_string(); }
                 }
             }
             Some(_) = rx_watch.recv() => {
@@ -352,21 +326,27 @@ async fn main() -> Result<()> {
                             MouseEventKind::ScrollUp => { app.state.autoscroll = false; app.state.log_scroll = app.state.log_scroll.saturating_sub(1); app.state.selection_start = None; }
                             MouseEventKind::ScrollDown => { app.state.autoscroll = false; app.state.log_scroll = app.state.log_scroll.saturating_add(1); app.state.selection_start = None; }
                             MouseEventKind::Down(_) => {
-                                let log_area_top = if app.state.mode == AppMode::Normal { 5 } else { 8 };
-                                if mouse.row >= log_area_top {
-                                    app.state.selection_start = Some(app.state.log_scroll + (mouse.row.saturating_sub(log_area_top)) as usize);
+                                if mouse.row >= app.state.log_area_rect.y && mouse.row < app.state.log_area_rect.y + app.state.log_area_rect.height {
+                                    app.state.selection_start = Some(app.state.log_scroll + (mouse.row - app.state.log_area_rect.y) as usize);
                                     app.state.selection_end = app.state.selection_start;
                                 } else { app.state.selection_start = None; }
                             }
                             MouseEventKind::Drag(_) => {
-                                let log_area_top = if app.state.mode == AppMode::Normal { 5 } else { 8 };
-                                let term_height = terminal.size().unwrap_or(ratatui::layout::Size::new(0, 80)).height;
-                                let log_area_bottom = term_height.saturating_sub(2);
                                 if let Some(_start) = app.state.selection_start {
-                                    let current_row_idx = app.state.log_scroll + (mouse.row.saturating_sub(log_area_top)) as usize;
+                                    let current_row_idx = app.state.log_scroll + (mouse.row.saturating_sub(app.state.log_area_rect.y)) as usize;
                                     app.state.selection_end = Some(current_row_idx);
-                                    if mouse.row <= log_area_top + 1 { app.state.log_scroll = app.state.log_scroll.saturating_sub(1); app.state.autoscroll = false; } 
-                                    else if mouse.row >= log_area_bottom { let max_scroll = app.current_log_len().saturating_sub(1); if app.state.log_scroll < max_scroll { app.state.log_scroll += 1; app.state.autoscroll = false; } }
+                                    
+                                    // Boundary Auto-scroll
+                                    if mouse.row <= app.state.log_area_rect.y + 1 {
+                                        app.state.log_scroll = app.state.log_scroll.saturating_sub(1);
+                                        app.state.autoscroll = false;
+                                    } else if mouse.row >= app.state.log_area_rect.y + app.state.log_area_rect.height.saturating_sub(1) {
+                                        let max_scroll = app.current_log_len().saturating_sub(1);
+                                        if app.state.log_scroll < max_scroll {
+                                            app.state.log_scroll += 1;
+                                            app.state.autoscroll = false;
+                                        }
+                                    }
                                 }
                             }
                             _ => {}
@@ -495,7 +475,22 @@ async fn main() -> Result<()> {
                                     (KeyCode::Char('G'), _) => { app.state.autoscroll = true; }
                                     (KeyCode::Char('y'), _) => {
                                         let current_cache = match app.state.current_tab { Tab::Dashboard => &app.cache_all, Tab::App => &app.cache_app, Tab::Build => &app.cache_build, Tab::Errors => &app.cache_err };
-                                        if let Some(line) = current_cache.get(app.state.log_scroll) { if let Ok(mut clipboard) = arboard::Clipboard::new() { let _ = clipboard.set_text(line.clone()); let _ = tx_log.send("[ok] top visible line yanked".to_string()); } }
+                                        
+                                        let content = if let (Some(s), Some(e)) = (app.state.selection_start, app.state.selection_end) {
+                                            let min = s.min(e);
+                                            let max = s.max(e).min(current_cache.len().saturating_sub(1));
+                                            current_cache[min..=max].join("\n")
+                                        } else if let Some(line) = current_cache.get(app.state.log_scroll) {
+                                            line.clone()
+                                        } else { String::new() };
+
+                                        if !content.is_empty() {
+                                            if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                                                let _ = clipboard.set_text(content);
+                                                let msg = if app.state.selection_start.is_some() { "[ok] selection yanked" } else { "[ok] top visible line yanked" };
+                                                let _ = tx_log.send(msg.to_string());
+                                            }
+                                        }
                                     }
                                     (KeyCode::Char('C'), _) => { if let Some(ref trace) = app.state.last_crash_trace { if let Ok(mut clipboard) = arboard::Clipboard::new() { let _ = clipboard.set_text(trace.clone()); let _ = tx_log.send("[ok] last crash trace yanked".to_string()); } } }
                                     (KeyCode::Char('m'), _) => {
@@ -625,6 +620,7 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
     let area = f.area();
     f.render_widget(Clear, area);
     if area.height < 5 || area.width < 10 { f.render_widget(Paragraph::new("Terminal too small").alignment(Alignment::Center), area); return; }
+    
     let mut main_constraints = vec![Constraint::Length(2), Constraint::Length(3), Constraint::Min(0), Constraint::Length(1)];
     if area.height < 15 { main_constraints.remove(0); }
     if area.height < 10 { main_constraints.remove(0); }
@@ -665,6 +661,7 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
     }
 
     let main_area = chunks[current_idx];
+    app.state.log_area_rect = main_area; // Dynamically track log area for mouse selection
 
     match app.state.current_tab {
         Tab::Dashboard => {
@@ -699,7 +696,12 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
             let lines: Vec<Line> = visible.iter().enumerate().map(|(i, l)| {
                 let idx = scroll + i;
                 let mut style = if l.contains("[err]") || l.contains("[build-err]") || l.contains(" E/") { Style::default().fg(Color::Red) } else if l.contains("[ok]") { Style::default().fg(Color::Green) } else if l.contains("[build]") || l.contains(" W/") { Style::default().fg(Color::Yellow) } else if l.contains(" I/") { Style::default().fg(Color::Cyan) } else { Style::default() };
-                if let (Some(s), Some(e)) = (app.state.selection_start, app.state.selection_end) { if idx >= s.min(e) && idx <= s.max(e) { style = style.bg(Color::Blue).fg(Color::White); } }
+                
+                // Visual Highlight for Selection
+                if let (Some(s), Some(e)) = (app.state.selection_start, app.state.selection_end) {
+                    if idx >= s.min(e) && idx <= s.max(e) { style = style.bg(Color::Blue).fg(Color::White); }
+                }
+                
                 if l.starts_with("at ") || l.starts_with("\tat ") || l.contains("...") { style = Style::default().fg(Color::DarkGray); }
                 Line::from(Span::styled(l, style))
             }).collect();
