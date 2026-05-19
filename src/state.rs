@@ -71,7 +71,7 @@ pub struct AppState {
     pub show_layout_bounds: bool,
     pub last_rebuild_at: Option<std::time::Instant>,
     pub settings_index: usize,
-    pub log_scroll: u16,
+    pub log_scroll: usize,
     pub mouse_captured: bool,
     pub selection_start: Option<usize>,
     pub selection_end: Option<usize>,

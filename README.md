@@ -13,14 +13,16 @@
 - **⚡️ Smart Build Telemetry:** Tracks current Gradle tasks and keeps a history of build durations.
 - **🔍 Power Logcat:** Instant search, level filtering (Alt + 1-5), and manual scroll pause/resume.
 - **📑 Multi-Tab Management:** Categorize logs into Dashboard, App, Build, and Errors views.
+- **🚀 Automated "Smooth" Transitions:** Auto-switches to the Build tab on start and App tab on success.
 - **🚨 Advanced Crash Detection:** Automatically highlights fatal exceptions, captures the full stack trace, and saves it to `crash_report.txt`.
 - **📟 Smart Stack Traces:** Boilerplate lines are dimmed to make the root cause of an error stand out.
 - **✨ Expo-Style Structured Logging:** Intercepts `[DeckDriod]` log prefixes and pretty-prints JSON payloads for modern app-side debugging.
-- **🎥 Media Tools:** One-key screen recording and screenshots pulled directly to your workspace.
+- **🎥 Media Tools:** One-key screen recording and screenshots pulled directly to your specified output directory.
 - **🔗 Deep Link Tester:** Quickly test deep links without touching your phone.
 - **🛠 Layout Debugger:** Toggle system layout bounds with a single hotkey.
 - **🔋 Battery Monitor:** Real-time device battery level tracking.
 - **⌨️ Custom Hotkeys:** Map your own shell commands to hotkeys in `.deckdriodconfig`.
+- **🏗 Cross-Directory Support:** Run `deckdriod` from anywhere by specifying your project path.
 
 ---
 
@@ -46,7 +48,7 @@ cargo install --path .
 
 ## 📖 How to Use
 
-Simply run `deckdriod` in the root of your Kotlin Multiplatform or Android project.
+Simply run `deckdriod` in the root of your project, or configure a `PROJECT_PATH` to run it from anywhere.
 
 ### Views
 
@@ -61,7 +63,8 @@ Simply run `deckdriod` in the root of your Kotlin Multiplatform or Android proje
 
 | Key | Action |
 | :--- | :--- |
-| `r` / `Enter` | Trigger Manual Build & Launch |
+| `a` / `r` / `Enter` | **Build & Launch**: Rebuilds and restarts the app. |
+| `L` (Shift+l) | **Launch Only**: Restarts the app without rebuilding. |
 | `/` | Search Logs (Substring matching) |
 | `h` | Open Advanced Help Popup |
 | `c` | Clear Logs & Crash Alerts |
@@ -70,8 +73,10 @@ Simply run `deckdriod` in the root of your Kotlin Multiplatform or Android proje
 | `s` | Take Screenshot (`.png`) |
 | `u` | Open Deep Link URL |
 | `b` | Toggle Layout Bounds on Device |
-| `e` | Export current log buffer to `deckdriod_logs.txt` |
+| `m` | Toggle Mouse (App vs Native Selection) |
 | `y` | Yank (Copy) the top visible log line to clipboard |
+| `A` | Yank (Copy) ALL visible logs to clipboard |
+| `C` (Shift+c) | Yank (Copy) the last crash trace to clipboard |
 | `Alt + 1-5` | Set Minimum Log Level (Verbose to Error) |
 | `↑`/`↓` / `Wheel` | Scroll Logs (Pauses Auto-follow) |
 | `G` | Resume Auto-follow Logs |
@@ -83,13 +88,15 @@ Simply run `deckdriod` in the root of your Kotlin Multiplatform or Android proje
 
 ## ⚙️ Configuration
 
-Create a `.deckdriodconfig` file in your project root to override defaults. You can also edit these interactively by pressing `i` inside the app.
+Create a `.deckdriodconfig` file in your project root OR your home directory (`~/.deckdriodconfig`) to override defaults.
 
 ```ini
 APP_ID=com.example.app.dev
 ACTIVITY=com.example.app/com.example.app.MainActivity
 WATCH_LATENCY=1.0
 REBUILD_GAP=2.0
+PROJECT_PATH=/path/to/your/kotlin/project
+OUTPUT_PATH=/path/to/screenshots/folder
 
 # Custom hotkeys (DECKDRIOD_CMD_<key>=command)
 DECKDRIOD_CMD_T="adb shell input text 'testuser'"
@@ -98,9 +105,11 @@ DECKDRIOD_CMD_T="adb shell input text 'testuser'"
 ### Available Settings
 
 - **APP_ID**: The package name of your Android application.
-- **ACTIVITY**: The full component name of your main activity (used for launching).
-- **WATCH_LATENCY**: Delay in seconds for the file watcher to detect changes.
-- **REBUILD_GAP**: Minimum time in seconds between automatic rebuilds (throttling).
+- **ACTIVITY**: The full component name of your main activity.
+- **WATCH_LATENCY**: Delay in seconds for the file watcher.
+- **REBUILD_GAP**: Minimum time in seconds between automatic rebuilds.
+- **PROJECT_PATH**: Path to the Kotlin app (allows running from any directory).
+- **OUTPUT_PATH**: Path where screenshots and recordings will be saved.
 
 ---
 
@@ -113,13 +122,6 @@ Contributions are welcome! If you'd like to improve DeckDriod, please follow the
 3.  **Commit** your changes (`git commit -m 'Add amazing feature'`).
 4.  **Push** to the branch (`git push origin feature/amazing-feature`).
 5.  **Open a Pull Request**.
-
-### Development Setup
-```bash
-git clone git@github.com:theasmat/deckdriod.git
-cd deckdriod
-cargo build
-```
 
 ---
 

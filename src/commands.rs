@@ -7,6 +7,7 @@ use chrono;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::mpsc;
 use std::time::{Instant, Duration};
+use std::path::Path;
 
 #[derive(Debug, Clone)]
 pub enum BuildEvent {
@@ -47,6 +48,13 @@ pub async fn build_and_launch(
     let start_time = Instant::now();
     let _ = tx_log.send("[build] starting...".to_string());
     
+    // Check if project path exists
+    let project_path = Path::new(&config.project_path);
+    if !project_path.exists() {
+        let _ = tx_log.send(format!("[err] project path does not exist: {}", config.project_path));
+        return Ok(());
+    }
+
     let mut child = Command::new("./gradlew")
         .args([
             ":androidApp:installDebug",
@@ -54,6 +62,7 @@ pub async fn build_and_launch(
             "--configuration-cache",
             "--daemon",
         ])
+        .current_dir(project_path)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -115,7 +124,28 @@ pub async fn build_and_launch(
     Ok(())
 }
 
-pub async fn take_screenshot(state: &AppState, tx_log: mpsc::UnboundedSender<String>) -> Result<()> {
+pub async fn launch_app(config: &Config, state: &AppState, tx_log: mpsc::UnboundedSender<String>) -> Result<()> {
+    if let Some(ref serial) = state.device_serial {
+        let _ = tx_log.send(format!("[info] launching {} on {}...", config.app_id, serial));
+        
+        Command::new("adb")
+            .args(["-s", serial, "shell", "am", "force-stop", &config.app_id])
+            .stdin(Stdio::null())
+            .status()
+            .await?;
+        
+        Command::new("adb")
+            .args(["-s", serial, "shell", "am", "start", "-n", &config.activity])
+            .stdin(Stdio::null())
+            .status()
+            .await?;
+        
+        let _ = tx_log.send(format!("[ok] launched on {}", serial));
+    }
+    Ok(())
+}
+
+pub async fn take_screenshot(config: &Config, state: &AppState, tx_log: mpsc::UnboundedSender<String>) -> Result<()> {
     if let Some(ref serial) = state.device_serial {
         let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
         let filename = format!("screenshot_{}.png", timestamp);
@@ -127,8 +157,10 @@ pub async fn take_screenshot(state: &AppState, tx_log: mpsc::UnboundedSender<Str
             .status()
             .await?;
         
+        let local_path = Path::new(&config.output_path).join(&filename);
+        
         Command::new("adb")
-            .args(["-s", serial, "pull", &remote_path, "."])
+            .args(["-s", serial, "pull", &remote_path, local_path.to_str().unwrap()])
             .stdin(Stdio::null())
             .status()
             .await?;
@@ -139,7 +171,7 @@ pub async fn take_screenshot(state: &AppState, tx_log: mpsc::UnboundedSender<Str
             .status()
             .await?;
             
-        let _ = tx_log.send(format!("[ok] screenshot saved as {}", filename));
+        let _ = tx_log.send(format!("[ok] screenshot saved to {}/{}", config.output_path, filename));
     }
     Ok(())
 }
@@ -211,7 +243,7 @@ impl Recorder {
         Ok(())
     }
 
-    pub async fn stop(&mut self, serial: &str, tx_log: mpsc::UnboundedSender<String>) -> Result<()> {
+    pub async fn stop(&mut self, config: &Config, serial: &str, tx_log: mpsc::UnboundedSender<String>) -> Result<()> {
         if let Some(mut child) = self.child.take() {
             let _ = child.start_kill();
             let _ = child.wait().await;
@@ -221,8 +253,10 @@ impl Recorder {
             
             tokio::time::sleep(Duration::from_secs(1)).await; // Wait for file to finalize
 
+            let local_path = Path::new(&config.output_path).join(&self.filename);
+
             Command::new("adb")
-                .args(["-s", serial, "pull", &remote_path, "."])
+                .args(["-s", serial, "pull", &remote_path, local_path.to_str().unwrap()])
                 .status()
                 .await?;
                 
@@ -231,7 +265,7 @@ impl Recorder {
                 .status()
                 .await?;
                 
-            let _ = tx_log.send(format!("[ok] recording saved as {}", self.filename));
+            let _ = tx_log.send(format!("[ok] recording saved to {}/{}", config.output_path, self.filename));
         }
         Ok(())
     }
