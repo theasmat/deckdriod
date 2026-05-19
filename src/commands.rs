@@ -70,11 +70,12 @@ pub async fn build_and_launch(
     config: &Config, 
     serials: Vec<String>,
     auto_open: bool,
+    force_rebuild: bool,
     tx_log: mpsc::UnboundedSender<String>,
     tx_build: mpsc::UnboundedSender<BuildEvent>
 ) -> Result<()> {
     let start_time = Instant::now();
-    let _ = tx_log.send("[build] starting...".to_string());
+    let _ = tx_log.send(if force_rebuild { "[build] starting (force)..." } else { "[build] starting..." }.to_string());
     
     let project_path = Path::new(&config.project_path);
     if !project_path.exists() {
@@ -82,13 +83,20 @@ pub async fn build_and_launch(
         return Ok(());
     }
 
+    let mut args = vec![
+        ":androidApp:installDebug",
+        "--parallel",
+        "--configuration-cache",
+        "--daemon",
+    ];
+
+    if force_rebuild {
+        args.insert(0, "clean");
+        args.push("--no-build-cache");
+    }
+
     let mut child = Command::new("./gradlew")
-        .args([
-            ":androidApp:installDebug",
-            "--parallel",
-            "--configuration-cache",
-            "--daemon",
-        ])
+        .args(&args)
         .current_dir(project_path)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

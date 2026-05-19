@@ -86,6 +86,7 @@ Simply run `deckdriod` in the root of your project, or configure a `PROJECT_PATH
 | Key | Action |
 | :--- | :--- |
 | `a` / `r` / `Enter` | **Build & Launch**: Rebuilds and restarts the app. |
+| `f` | **Force Rebuild**: Clean + Build without cache. |
 | `L` | **Launch Only**: Restarts the app without rebuilding. |
 | `B` (Shift+b) | **Broadcast Toggle**: Run commands on **ALL** connected devices. |
 | `E` | **Emulator Selector**: Select and launch an Android emulator. |
@@ -100,7 +101,7 @@ Simply run `deckdriod` in the root of your project, or configure a `PROJECT_PATH
 | `u` | Open Deep Link URL |
 | `b` | Toggle Layout Bounds on Device |
 | `m` | Toggle Mouse (App vs Native Selection) |
-| `y` | Yank (Copy) the top visible log line to clipboard |
+| `y` | Yank (Copy) selection or top visible log line to clipboard |
 | `A` | Yank (Copy) ALL visible logs to clipboard |
 | `C` | Yank (Copy) the last crash trace to clipboard |
 | `Alt + 1-5` | Set Minimum Log Level (Verbose to Error) |

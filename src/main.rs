@@ -244,7 +244,7 @@ async fn main() -> Result<()> {
         let cfg_bg = app.config.clone();
         let serials = vec![serial.clone()];
         let auto_open = app.state.auto_open;
-        tokio::spawn(async move { let _ = commands::build_and_launch(&cfg_bg, serials, auto_open, build_tx, build_evt_tx).await; });
+        tokio::spawn(async move { let _ = commands::build_and_launch(&cfg_bg, serials, auto_open, false, build_tx, build_evt_tx).await; });
     }
 
     let mut interval = tokio::time::interval(std::time::Duration::from_millis(100));
@@ -314,7 +314,7 @@ async fn main() -> Result<()> {
                         let cfg = app.config.clone();
                         let serials = app.get_target_serials().await;
                         let auto_open = app.state.auto_open;
-                        tokio::spawn(async move { let _ = commands::build_and_launch(&cfg, serials, auto_open, build_tx, build_evt_tx).await; });
+                        tokio::spawn(async move { let _ = commands::build_and_launch(&cfg, serials, auto_open, false, build_tx, build_evt_tx).await; });
                     }
                 }
             }
@@ -368,7 +368,19 @@ async fn main() -> Result<()> {
                                         let cfg = app.config.clone();
                                         let serials = app.get_target_serials().await;
                                         let auto_open = app.state.auto_open;
-                                        tokio::spawn(async move { let _ = commands::build_and_launch(&cfg, serials, auto_open, build_tx, build_evt_tx).await; });
+                                        tokio::spawn(async move { let _ = commands::build_and_launch(&cfg, serials, auto_open, false, build_tx, build_evt_tx).await; });
+                                    }
+                                    (KeyCode::Char('f'), _) => {
+                                        app.state.last_rebuild_at = Some(std::time::Instant::now());
+                                        app.state.current_tab = Tab::Build;
+                                        app.state.autoscroll = true;
+                                        app.refresh_filter_cache();
+                                        let build_tx = tx_log.clone();
+                                        let build_evt_tx = tx_build.clone();
+                                        let cfg = app.config.clone();
+                                        let serials = app.get_target_serials().await;
+                                        let auto_open = app.state.auto_open;
+                                        tokio::spawn(async move { let _ = commands::build_and_launch(&cfg, serials, auto_open, true, build_tx, build_evt_tx).await; });
                                     }
                                     (KeyCode::Char('c'), _) => {
                                         app.logs.clear(); app.cache_all.clear(); app.cache_app.clear(); app.cache_build.clear(); app.cache_err.clear();
@@ -678,7 +690,13 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
             let inner_cmd_area = cmd_block.inner(dash_chunks[1]);
             f.render_widget(cmd_block, dash_chunks[1]);
             let cmd_layout = Layout::default().direction(Direction::Horizontal).constraints([Constraint::Percentage(33), Constraint::Percentage(33), Constraint::Percentage(33)]).split(inner_cmd_area);
-            let col1 = vec![Line::from(vec![Span::styled(" [a/r/Ent] ", Style::default().fg(Color::Cyan).bold()), Span::raw("Build/Launch")]), Line::from(vec![Span::styled(" [v]       ", Style::default().fg(Color::Cyan).bold()), Span::raw("Record Video")]), Line::from(vec![Span::styled(" [x]       ", Style::default().fg(Color::Cyan).bold()), Span::raw("Clear Data")]), Line::from(vec![Span::styled(" [/]       ", Style::default().fg(Color::Cyan).bold()), Span::raw("Search")])];
+            let col1 = vec![
+                Line::from(vec![Span::styled(" [a/r/Ent] ", Style::default().fg(Color::Cyan).bold()), Span::raw("Build/Launch")]),
+                Line::from(vec![Span::styled(" [f]       ", Style::default().fg(Color::Cyan).bold()), Span::raw("Force Rebuild")]),
+                Line::from(vec![Span::styled(" [v]       ", Style::default().fg(Color::Cyan).bold()), Span::raw("Record Video")]),
+                Line::from(vec![Span::styled(" [x]       ", Style::default().fg(Color::Cyan).bold()), Span::raw("Clear Data")]),
+                Line::from(vec![Span::styled(" [/]       ", Style::default().fg(Color::Cyan).bold()), Span::raw("Search")]),
+            ];
             let col2 = vec![Line::from(vec![Span::styled(" [L]       ", Style::default().fg(Color::Cyan).bold()), Span::raw("Launch Only")]), Line::from(vec![Span::styled(" [u]       ", Style::default().fg(Color::Cyan).bold()), Span::raw("Deep Link")]), Line::from(vec![Span::styled(" [c]       ", Style::default().fg(Color::Cyan).bold()), Span::raw("Clear Logs")]), Line::from(vec![Span::styled(" [B]       ", Style::default().fg(Color::Cyan).bold()), Span::raw("Broadcast Toggle")])];
             let col3 = vec![Line::from(vec![Span::styled(" [s]       ", Style::default().fg(Color::Cyan).bold()), Span::raw("Screenshot")]), Line::from(vec![Span::styled(" [b]       ", Style::default().fg(Color::Cyan).bold()), Span::raw("Toggle Bounds")]), Line::from(vec![Span::styled(" [i]       ", Style::default().fg(Color::Cyan).bold()), Span::raw("Settings")]), Line::from(vec![Span::styled(" [M]       ", Style::default().fg(Color::Cyan).bold()), Span::raw("MCP Toggle")])];
             f.render_widget(Paragraph::new(col1), cmd_layout[0]);
@@ -716,7 +734,21 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
         let area = centered_rect(70, 80, f.area());
         f.render_widget(Clear, area);
         let title = if app.state.mode == AppMode::Welcome { " Welcome to DeckDriod! " } else { " Advanced Help " };
-        let help = vec![Line::from(vec![Span::styled("--- Controls ---", Style::default().bold())]), Line::from(vec![Span::styled(" a / r / Ent ", Style::default().fg(Color::Cyan)), Span::raw(": Build & Launch")]), Line::from(vec![Span::styled(" L           ", Style::default().fg(Color::Cyan)), Span::raw(": Launch Only")]), Line::from(vec![Span::styled(" E           ", Style::default().fg(Color::Cyan)), Span::raw(": Launch Emulator")]), Line::from(vec![Span::styled(" B           ", Style::default().fg(Color::Cyan)), Span::raw(": Broadcast Toggle (Run actions on ALL devices)")]), Line::from(vec![Span::styled(" M           ", Style::default().fg(Color::Cyan)), Span::raw(": MCP Toggle (Enable AI log analysis)")]), Line::from(vec![Span::styled(" c           ", Style::default().fg(Color::Cyan)), Span::raw(": Clear Logs")]), Line::from(vec![Span::styled(" i           ", Style::default().fg(Color::Cyan)), Span::raw(": Settings")]), Line::from(vec![Span::styled(" s / v       ", Style::default().fg(Color::Cyan)), Span::raw(": Screenshot / Video")]), Line::from(vec![Span::styled(" y / A / C   ", Style::default().fg(Color::Cyan)), Span::raw(": Copy Line/All/Crash")]), Line::from(vec![Span::styled(" e           ", Style::default().fg(Color::Cyan)), Span::raw(": Export logs to deckdriod_export.txt")]), Line::from(vec![Span::styled(" q / Esc     ", Style::default().fg(Color::Cyan)), Span::raw(": Close/Quit")])];
+        let help = vec![
+            Line::from(vec![Span::styled("--- Controls ---", Style::default().bold())]),
+            Line::from(vec![Span::styled(" a / r / Ent ", Style::default().fg(Color::Cyan)), Span::raw(": Build & Launch")]),
+            Line::from(vec![Span::styled(" f           ", Style::default().fg(Color::Cyan)), Span::raw(": Force Rebuild (Clean + No Cache)")]),
+            Line::from(vec![Span::styled(" L           ", Style::default().fg(Color::Cyan)), Span::raw(": Launch Only")]),
+            Line::from(vec![Span::styled(" E           ", Style::default().fg(Color::Cyan)), Span::raw(": Launch Emulator")]),
+            Line::from(vec![Span::styled(" B           ", Style::default().fg(Color::Cyan)), Span::raw(": Broadcast Toggle (Run actions on ALL devices)")]),
+            Line::from(vec![Span::styled(" M           ", Style::default().fg(Color::Cyan)), Span::raw(": MCP Toggle (Enable AI log analysis)")]),
+            Line::from(vec![Span::styled(" c           ", Style::default().fg(Color::Cyan)), Span::raw(": Clear Logs")]),
+            Line::from(vec![Span::styled(" i           ", Style::default().fg(Color::Cyan)), Span::raw(": Settings")]),
+            Line::from(vec![Span::styled(" s / v       ", Style::default().fg(Color::Cyan)), Span::raw(": Screenshot / Video")]),
+            Line::from(vec![Span::styled(" y / A / C   ", Style::default().fg(Color::Cyan)), Span::raw(": Copy Line/All/Crash")]),
+            Line::from(vec![Span::styled(" e           ", Style::default().fg(Color::Cyan)), Span::raw(": Export logs to deckdriod_export.txt")]),
+            Line::from(vec![Span::styled(" q / Esc     ", Style::default().fg(Color::Cyan)), Span::raw(": Close/Quit")]),
+        ];
         f.render_widget(Paragraph::new(help).block(Block::default().borders(Borders::ALL).title(title).border_style(Style::default().fg(Color::Cyan))).wrap(Wrap { trim: true }), area);
     }
 
