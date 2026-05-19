@@ -40,7 +40,7 @@ pub async fn run_server(port: u16, shared_logs: Arc<RwLock<SharedLogState>>, mut
 }
 
 async fn root_handler() -> &'static str {
-    "DeckDriod MCP Server is running!\n\nRoutes:\n- /usage : Detailed usage guide\n- /sse   : MCP SSE endpoint for AI assistants"
+    "DeckDriod MCP Server is running!\n\nRoutes:\n- /usage : Detailed usage guide & AI Prompts\n- /sse   : MCP SSE endpoint for AI assistants"
 }
 
 async fn usage_handler() -> String {
@@ -91,7 +91,7 @@ async fn message_handler(
                 "tools": [
                     {
                         "name": "get_usage_guide",
-                        "description": "Returns a detailed guide on how to use DeckDriod, including all hotkeys and views.",
+                        "description": "Returns the complete DeckDriod Knowledge Base, including architecture, hotkeys, and AI debugging prompts.",
                         "inputSchema": { "type": "object", "properties": {} }
                     },
                     {
@@ -155,34 +155,47 @@ fn uuid_v4() -> String {
 }
 
 pub fn get_detailed_guide() -> String {
-    r#"# 🚀 DeckDriod Usage Guide
+    r#"# 🚀 DeckDriod Knowledge Base & Usage Guide
 
-DeckDriod is a high-performance Android TUI dashboard.
+## 📱 What is DeckDriod?
+DeckDriod is a high-performance, unified terminal dashboard for Android & Kotlin development, built in **Rust**. It eliminates the need for switching between Android Studio, separate Logcat terminals, and resource monitors.
 
-## 📑 Views
-- [1] Dashboard: Resource usage & commands
-- [2] App Logs: Main application logcat
-- [3] Build: Real-time Gradle output
-- [4] Errors: Crashes and filtered errors
+### Key Architecture:
+- **Reactive TUI**: 30fps smooth UI using the `ratatui` crate.
+- **Non-Blocking Logic**: All ADB, Gradle, and system polling occur in background `tokio` tasks.
+- **AI-Powered Debugging**: Built-in **MCP (Model Context Protocol)** server allows LLMs to "see" your device state.
+- **Virtualized Rendering**: Handles 5,000+ log lines with near-zero CPU overhead.
+
+## 📑 Views & Navigation
+- **[1] Dashboard**: High-level telemetry. Sparklines for CPU/Memory, Active Gradle tasks, and Command Shortcuts.
+- **[2] App Logs**: Dedicated Logcat view. Auto-prettifies JSON payloads and dims stack trace boilerplate.
+- **[3] Build Logs**: Real-time Gradle output. Perfect for debugging complex build scripts.
+- **[4] Errors**: Auto-filtered view showing only crashes (`FATAL EXCEPTION`) and `E/` level logs.
 
 ## ⌨️ Essential Hotkeys
-- a / r : Build & Launch (cached)
-- f     : Force Rebuild (clean, no-cache)
-- L     : Launch Only (skip Gradle)
-- E     : Emulator Selector
-- B     : Broadcast Mode (Run on ALL devices)
-- M     : MCP Toggle (Enable AI debugging)
-- s / v : Screenshot / Video recording
-- c     : Clear all logs and alerts
-- y / A : Copy selection / ALL logs
-- /     : Search current log view
+- **a / r / Ent**: Build and Launch the application (standard).
+- **f**: **Force Rebuild**. Cleans project and ignores Gradle cache for fresh builds.
+- **L**: **Launch Only**. Restarts the app on device without waiting for a rebuild.
+- **B (Shift+B)**: **Broadcast Mode**. Executes actions on ALL connected devices/emulators at once.
+- **E**: **Emulator Selector**. Discover and boot local AVDs without leaving the terminal.
+- **M (Shift+M)**: **MCP Toggle**. Starts/Stops the AI bridge server.
+- **y**: **Intelligent Yank**. Copies selection (if active) or the top visible log line.
+- **s / v**: Instant Screenshot / MP4 Video Recording (saved to your configured `OUTPUT_PATH`).
 
-## 🤖 Why use MCP?
-By enabling MCP (Shift+M), you allow AI assistants to:
-1. Analyze crashes instantly using stack traces.
-2. Debug app state by reading recent logs.
-3. Monitor build progress and failures.
+## 🤖 AI Integration & MCP Prompts
+By enabling MCP, you can use AI assistants to solve complex issues. Give your AI the following context or use these prompts:
 
-Connecting AI: Configure your assistant to connect to http://localhost:3000/sse
+### Recommended AI System Context:
+"You are an expert Android/Kotlin developer. You have access to the DeckDriod MCP server which provides real-time logs and crash reports. Use `get_latest_crash` to analyze errors and `get_recent_logs` to understand app state."
+
+### Powerful AI Prompts:
+1. **Debug a Crash**: "I just hit a crash. Use `get_latest_crash` to read the stack trace and explain why it happened in my Kotlin code."
+2. **Analyze Performance**: "Read the last 100 lines of logs using `get_recent_logs`. Do you see any repeated network requests or memory warnings?"
+3. **Understand App Logic**: "The app logs structured JSON with the prefix `[DeckDriod]`. Use `get_recent_logs` to analyze the most recent app state change."
+4. **Fix Build Errors**: "My Gradle build failed. Read the build logs from `get_recent_logs` and suggest what I need to change in my `build.gradle.kts`."
+
+## ⚙️ Configuration (MCP Setup)
+Connect any MCP client to: `http://localhost:3000/sse`
+You can change the port in `Settings (i)` or `.deckdriodconfig`.
 "#.to_string()
 }
