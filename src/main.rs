@@ -4,6 +4,7 @@ mod commands;
 mod logcat;
 mod watcher;
 mod stats;
+mod mcp;
 
 use anyhow::Result;
 use config::Config;
@@ -61,16 +62,29 @@ impl App {
         
         let l = log.trim().to_string();
 
+        // Sync with MCP Shared State
+        {
+            let mut shared = self.state.shared_logs.write().unwrap();
+            shared.app_logs.push(l.clone());
+            if shared.app_logs.len() > 1000 { shared.app_logs.remove(0); }
+        }
+
         // 1. Crash Capture
         if l.contains("FATAL EXCEPTION") || l.contains("AndroidRuntime:E") {
             self.state.last_crash = Some(l.clone());
             self.state.last_crash_trace = Some(l.clone());
             self.state.is_capturing_crash = true;
+            
+            let mut shared = self.state.shared_logs.write().unwrap();
+            shared.last_crash = Some(l.clone());
         } else if self.state.is_capturing_crash {
             if l.starts_with("at ") || l.starts_with("\tat ") || l.contains("Caused by:") {
                 if let Some(ref mut trace) = self.state.last_crash_trace {
                     trace.push('\n');
                     trace.push_str(&l);
+                    
+                    let mut shared = self.state.shared_logs.write().unwrap();
+                    shared.last_crash = Some(trace.clone());
                 }
             } else {
                 self.state.is_capturing_crash = false;
@@ -88,9 +102,7 @@ impl App {
                 if let Ok(value) = serde_json::from_str::<serde_json::Value>(json_part) {
                     if let Ok(pretty) = serde_json::to_string_pretty(&value) {
                         logs_to_add.push("--- App State ---".to_string());
-                        for line in pretty.lines() {
-                            logs_to_add.push(format!("  {}", line));
-                        }
+                        for line in pretty.lines() { logs_to_add.push(format!("  {}", line)); }
                         logs_to_add.push("-----------------".to_string());
                     }
                 }
@@ -115,9 +127,13 @@ impl App {
                     if self.cache_app.len() > 5000 { self.cache_app.remove(0); }
                 }
 
-                if entry.contains(" E/") || entry.contains("[err]") || entry.contains("[build-err]") || entry.contains("FATAL") {
+                if entry.contains(" E/") || entry.contains("[err]") || entry.contains("[build-err]") || entry.contains(" FATAL") {
                     self.cache_err.push(entry.clone());
                     if self.cache_err.len() > 5000 { self.cache_err.remove(0); }
+                    
+                    let mut shared = self.state.shared_logs.write().unwrap();
+                    shared.error_logs.push(entry.clone());
+                    if shared.error_logs.len() > 500 { shared.error_logs.remove(0); }
                 }
             }
         }
@@ -138,19 +154,13 @@ impl App {
 
     fn matches_filter(&self, log: &str) -> bool {
         if !self.config.log_tag.is_empty() {
-            if !log.contains(&self.config.log_tag) {
-                return false;
-            }
+            if !log.contains(&self.config.log_tag) { return false; }
         }
         if let Some(level) = LogLevel::from_str(log) {
-            if (level as u8) < (self.state.min_log_level as u8) {
-                return false;
-            }
+            if (level as u8) < (self.state.min_log_level as u8) { return false; }
         }
         if !self.state.search_query.is_empty() {
-            if !log.to_lowercase().contains(&self.state.search_query.to_lowercase()) {
-                return false;
-            }
+            if !log.to_lowercase().contains(&self.state.search_query.to_lowercase()) { return false; }
         }
         true
     }
@@ -260,6 +270,7 @@ async fn main() -> Result<()> {
 
     let mut interval = tokio::time::interval(std::time::Duration::from_millis(100));
     let mut last_draw = std::time::Instant::now();
+    let mut mcp_shutdown_tx: Option<mpsc::Sender<()>> = None;
 
     loop {
         if last_draw.elapsed() >= std::time::Duration::from_millis(33) {
@@ -304,8 +315,15 @@ async fn main() -> Result<()> {
                         app.state.current_tab = Tab::App;
                         app.state.autoscroll = true;
                         app.refresh_filter_cache();
+                        
+                        let mut shared = app.state.shared_logs.write().unwrap();
+                        shared.build_status = "Success".to_string();
                     }
-                    BuildEvent::Failed => { app.state.build_task = None; }
+                    BuildEvent::Failed => { 
+                        app.state.build_task = None; 
+                        let mut shared = app.state.shared_logs.write().unwrap();
+                        shared.build_status = "Failed".to_string();
+                    }
                 }
             }
             Some(_) = rx_watch.recv() => {
@@ -398,8 +416,22 @@ async fn main() -> Result<()> {
                                     }
                                     (KeyCode::Char('B'), _) => {
                                         app.state.is_broadcast = !app.state.is_broadcast;
-                                        let msg = if app.state.is_broadcast { "[info] BROADCAST mode ON (all devices)" } else { "[info] BROADCAST mode OFF (selected device only)" };
+                                        let msg = if app.state.is_broadcast { "[info] BROADCAST mode ON" } else { "[info] BROADCAST mode OFF" };
                                         let _ = tx_log.send(msg.to_string());
+                                    }
+                                    (KeyCode::Char('M'), _) => {
+                                        app.state.mcp_server_active = !app.state.mcp_server_active;
+                                        if app.state.mcp_server_active {
+                                            let (tx, rx) = mpsc::channel(1);
+                                            mcp_shutdown_tx = Some(tx);
+                                            let port = app.state.mcp_port;
+                                            let shared = Arc::clone(&app.state.shared_logs);
+                                            tokio::spawn(async move { mcp::run_server(port, shared, rx).await; });
+                                            let _ = tx_log.send(format!("[info] MCP server started on port {}", port));
+                                        } else if let Some(tx) = mcp_shutdown_tx.take() {
+                                            let _ = tx.send(()).await;
+                                            let _ = tx_log.send("[info] MCP server stopped".to_string());
+                                        }
                                     }
                                     (KeyCode::Char('E'), _) => {
                                         if let Ok(avds) = commands::get_avds().await {
@@ -603,11 +635,13 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
     if area.height >= 15 {
         let battery_span = match app.state.stats.battery_level { Some(l) => Span::styled(format!("BAT:{}%", l), if l < 20 { Style::default().fg(Color::Red) } else { Style::default().fg(Color::Green) }), None => Span::raw("BAT:--%").dark_gray() };
         let broadcast_span = if app.state.is_broadcast { Span::styled(" [BROADCAST] ", Style::default().bg(Color::Red).fg(Color::White).bold()) } else { Span::raw("") };
+        let mcp_span = if app.state.mcp_server_active { Span::styled(format!(" [MCP:{}] ", app.state.mcp_port), Style::default().bg(Color::Blue).fg(Color::White).bold()) } else { Span::raw("") };
         let header_line = Line::from(vec![
             Span::styled(" DeckDriod ", Style::default().bold().fg(Color::Cyan)),
             Span::raw(format!("({}) ", app.state.device_serial.as_deref().unwrap_or("none"))),
             battery_span,
             broadcast_span,
+            mcp_span,
             Span::raw(" | Mouse:"), Span::raw(if app.state.mouse_captured { "APP" } else { "NATIVE" }).bold(),
             Span::raw(" | Watch:"), Span::raw(if app.state.auto_rebuild { "ON" } else { "OFF" }).bold(),
             Span::raw(" Open:"), Span::raw(if app.state.auto_open { "ON" } else { "OFF" }).bold(),
@@ -640,7 +674,8 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
             let cpu_title = if let Some(ref t) = app.state.build_task { format!(" BUILD: {} ", truncate(t, (stats_layout[0].width as usize).saturating_sub(10))) } else { format!(" CPU: {:.1}% ", app.state.stats.last_cpu) };
             let mem_title = format!(" MEM: {:.1}% ", app.state.stats.last_mem);
             f.render_widget(Sparkline::default().block(Block::default().borders(Borders::ALL).title(cpu_title)).data(&app.state.stats.cpu_usage.iter().map(|&v| (v * 10.0) as u64).collect::<Vec<_>>()).style(Style::default().fg(Color::Green)), stats_layout[0]);
-            f.render_widget(Sparkline::default().block(Block::default().borders(Borders::ALL).title(mem_title)).data(&app.state.stats.mem_usage.iter().map(|&v| (v * 10.0) as u64).collect::<Vec<_>>()).style(Style::default().fg(Color::Blue)), stats_layout[1]);
+            let mem_data: Vec<u64> = app.state.stats.mem_usage.iter().map(|&v| (v * 10.0) as u64).collect();
+            f.render_widget(Sparkline::default().block(Block::default().borders(Borders::ALL).title(mem_title)).data(&mem_data).style(Style::default().fg(Color::Blue)), stats_layout[1]);
 
             let cmd_block = Block::default().borders(Borders::ALL).title(" Quick Commands ");
             let inner_cmd_area = cmd_block.inner(dash_chunks[1]);
@@ -648,7 +683,7 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
             let cmd_layout = Layout::default().direction(Direction::Horizontal).constraints([Constraint::Percentage(33), Constraint::Percentage(33), Constraint::Percentage(33)]).split(inner_cmd_area);
             let col1 = vec![Line::from(vec![Span::styled(" [a/r/Ent] ", Style::default().fg(Color::Cyan).bold()), Span::raw("Build/Launch")]), Line::from(vec![Span::styled(" [v]       ", Style::default().fg(Color::Cyan).bold()), Span::raw("Record Video")]), Line::from(vec![Span::styled(" [x]       ", Style::default().fg(Color::Cyan).bold()), Span::raw("Clear Data")]), Line::from(vec![Span::styled(" [/]       ", Style::default().fg(Color::Cyan).bold()), Span::raw("Search")])];
             let col2 = vec![Line::from(vec![Span::styled(" [L]       ", Style::default().fg(Color::Cyan).bold()), Span::raw("Launch Only")]), Line::from(vec![Span::styled(" [u]       ", Style::default().fg(Color::Cyan).bold()), Span::raw("Deep Link")]), Line::from(vec![Span::styled(" [c]       ", Style::default().fg(Color::Cyan).bold()), Span::raw("Clear Logs")]), Line::from(vec![Span::styled(" [B]       ", Style::default().fg(Color::Cyan).bold()), Span::raw("Broadcast Toggle")])];
-            let col3 = vec![Line::from(vec![Span::styled(" [s]       ", Style::default().fg(Color::Cyan).bold()), Span::raw("Screenshot")]), Line::from(vec![Span::styled(" [b]       ", Style::default().fg(Color::Cyan).bold()), Span::raw("Toggle Bounds")]), Line::from(vec![Span::styled(" [i]       ", Style::default().fg(Color::Cyan).bold()), Span::raw("Settings")]), Line::from(vec![Span::styled(" [E]       ", Style::default().fg(Color::Cyan).bold()), Span::raw("Emulators")])];
+            let col3 = vec![Line::from(vec![Span::styled(" [s]       ", Style::default().fg(Color::Cyan).bold()), Span::raw("Screenshot")]), Line::from(vec![Span::styled(" [b]       ", Style::default().fg(Color::Cyan).bold()), Span::raw("Toggle Bounds")]), Line::from(vec![Span::styled(" [i]       ", Style::default().fg(Color::Cyan).bold()), Span::raw("Settings")]), Line::from(vec![Span::styled(" [M]       ", Style::default().fg(Color::Cyan).bold()), Span::raw("MCP Toggle")])];
             f.render_widget(Paragraph::new(col1), cmd_layout[0]);
             f.render_widget(Paragraph::new(col2), cmd_layout[1]);
             f.render_widget(Paragraph::new(col3), cmd_layout[2]);
@@ -679,7 +714,7 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
         let area = centered_rect(70, 80, f.area());
         f.render_widget(Clear, area);
         let title = if app.state.mode == AppMode::Welcome { " Welcome to DeckDriod! " } else { " Advanced Help " };
-        let help = vec![Line::from(vec![Span::styled("--- Controls ---", Style::default().bold())]), Line::from(vec![Span::styled(" a / r / Ent ", Style::default().fg(Color::Cyan)), Span::raw(": Build & Launch")]), Line::from(vec![Span::styled(" L           ", Style::default().fg(Color::Cyan)), Span::raw(": Launch Only")]), Line::from(vec![Span::styled(" E           ", Style::default().fg(Color::Cyan)), Span::raw(": Launch Emulator")]), Line::from(vec![Span::styled(" B           ", Style::default().fg(Color::Cyan)), Span::raw(": Broadcast Toggle (Run actions on ALL devices)")]), Line::from(vec![Span::styled(" c           ", Style::default().fg(Color::Cyan)), Span::raw(": Clear Logs")]), Line::from(vec![Span::styled(" i           ", Style::default().fg(Color::Cyan)), Span::raw(": Settings")]), Line::from(vec![Span::styled(" s / v       ", Style::default().fg(Color::Cyan)), Span::raw(": Screenshot / Video")]), Line::from(vec![Span::styled(" y / A / C   ", Style::default().fg(Color::Cyan)), Span::raw(": Copy Line/All/Crash")]), Line::from(vec![Span::styled(" e           ", Style::default().fg(Color::Cyan)), Span::raw(": Export logs to deckdriod_export.txt")]), Line::from(vec![Span::styled(" q / Esc     ", Style::default().fg(Color::Cyan)), Span::raw(": Close/Quit")])];
+        let help = vec![Line::from(vec![Span::styled("--- Controls ---", Style::default().bold())]), Line::from(vec![Span::styled(" a / r / Ent ", Style::default().fg(Color::Cyan)), Span::raw(": Build & Launch")]), Line::from(vec![Span::styled(" L           ", Style::default().fg(Color::Cyan)), Span::raw(": Launch Only")]), Line::from(vec![Span::styled(" E           ", Style::default().fg(Color::Cyan)), Span::raw(": Launch Emulator")]), Line::from(vec![Span::styled(" B           ", Style::default().fg(Color::Cyan)), Span::raw(": Broadcast Toggle (Run actions on ALL devices)")]), Line::from(vec![Span::styled(" M           ", Style::default().fg(Color::Cyan)), Span::raw(": MCP Toggle (Enable AI log analysis)")]), Line::from(vec![Span::styled(" c           ", Style::default().fg(Color::Cyan)), Span::raw(": Clear Logs")]), Line::from(vec![Span::styled(" i           ", Style::default().fg(Color::Cyan)), Span::raw(": Settings")]), Line::from(vec![Span::styled(" s / v       ", Style::default().fg(Color::Cyan)), Span::raw(": Screenshot / Video")]), Line::from(vec![Span::styled(" y / A / C   ", Style::default().fg(Color::Cyan)), Span::raw(": Copy Line/All/Crash")]), Line::from(vec![Span::styled(" e           ", Style::default().fg(Color::Cyan)), Span::raw(": Export logs to deckdriod_export.txt")]), Line::from(vec![Span::styled(" q / Esc     ", Style::default().fg(Color::Cyan)), Span::raw(": Close/Quit")])];
         f.render_widget(Paragraph::new(help).block(Block::default().borders(Borders::ALL).title(title).border_style(Style::default().fg(Color::Cyan))).wrap(Wrap { trim: true }), area);
     }
 

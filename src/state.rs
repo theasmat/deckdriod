@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 use std::time::Duration;
+use std::sync::{Arc, RwLock};
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum AppMode {
@@ -51,6 +52,15 @@ pub enum Tab {
     Errors,
 }
 
+/// Thread-safe shared state for MCP server
+#[derive(Default)]
+pub struct SharedLogState {
+    pub app_logs: Vec<String>,
+    pub error_logs: Vec<String>,
+    pub last_crash: Option<String>,
+    pub build_status: String,
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub auto_rebuild: bool,
@@ -79,6 +89,11 @@ pub struct AppState {
     pub mouse_captured: bool,
     pub selection_start: Option<usize>,
     pub selection_end: Option<usize>,
+    
+    // MCP State
+    pub mcp_server_active: bool,
+    pub mcp_port: u16,
+    pub shared_logs: Arc<RwLock<SharedLogState>>,
 }
 
 impl Default for AppState {
@@ -110,6 +125,9 @@ impl Default for AppState {
             mouse_captured: true,
             selection_start: None,
             selection_end: None,
+            mcp_server_active: false,
+            mcp_port: 3000,
+            shared_logs: Arc::new(RwLock::new(SharedLogState::default())),
         }
     }
 }
