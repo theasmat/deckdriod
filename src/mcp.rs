@@ -22,6 +22,8 @@ pub async fn run_server(port: u16, shared_logs: Arc<RwLock<SharedLogState>>, mut
     let state = AppState { logs: shared_logs };
 
     let app = Router::new()
+        .route("/", get(root_handler))
+        .route("/usage", get(usage_handler))
         .route("/sse", get(sse_handler))
         .route("/messages", post(message_handler))
         .layer(CorsLayer::permissive())
@@ -35,6 +37,14 @@ pub async fn run_server(port: u16, shared_logs: Arc<RwLock<SharedLogState>>, mut
         })
         .await
         .unwrap();
+}
+
+async fn root_handler() -> &'static str {
+    "DeckDriod MCP Server is running!\n\nRoutes:\n- /usage : Detailed usage guide\n- /sse   : MCP SSE endpoint for AI assistants"
+}
+
+async fn usage_handler() -> String {
+    get_detailed_guide()
 }
 
 async fn sse_handler(
@@ -80,6 +90,11 @@ async fn message_handler(
             "result": {
                 "tools": [
                     {
+                        "name": "get_usage_guide",
+                        "description": "Returns a detailed guide on how to use DeckDriod, including all hotkeys and views.",
+                        "inputSchema": { "type": "object", "properties": {} }
+                    },
+                    {
                         "name": "get_recent_logs",
                         "description": "Returns the most recent application logs.",
                         "inputSchema": {
@@ -105,6 +120,9 @@ async fn message_handler(
         "tools/call" => {
             let tool_name = request["params"]["name"].as_str().unwrap_or("");
             let result = match tool_name {
+                "get_usage_guide" => {
+                    json!({ "content": [{ "type": "text", "text": get_detailed_guide() }] })
+                },
                 "get_recent_logs" => {
                     let count = request["params"]["arguments"]["count"].as_u64().unwrap_or(100) as usize;
                     let logs = state.logs.read().unwrap();
@@ -134,4 +152,37 @@ fn uuid_v4() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
     format!("{:x}", now)
+}
+
+pub fn get_detailed_guide() -> String {
+    r#"# 🚀 DeckDriod Usage Guide
+
+DeckDriod is a high-performance Android TUI dashboard.
+
+## 📑 Views
+- [1] Dashboard: Resource usage & commands
+- [2] App Logs: Main application logcat
+- [3] Build: Real-time Gradle output
+- [4] Errors: Crashes and filtered errors
+
+## ⌨️ Essential Hotkeys
+- a / r : Build & Launch (cached)
+- f     : Force Rebuild (clean, no-cache)
+- L     : Launch Only (skip Gradle)
+- E     : Emulator Selector
+- B     : Broadcast Mode (Run on ALL devices)
+- M     : MCP Toggle (Enable AI debugging)
+- s / v : Screenshot / Video recording
+- c     : Clear all logs and alerts
+- y / A : Copy selection / ALL logs
+- /     : Search current log view
+
+## 🤖 Why use MCP?
+By enabling MCP (Shift+M), you allow AI assistants to:
+1. Analyze crashes instantly using stack traces.
+2. Debug app state by reading recent logs.
+3. Monitor build progress and failures.
+
+Connecting AI: Configure your assistant to connect to http://localhost:3000/sse
+"#.to_string()
 }
