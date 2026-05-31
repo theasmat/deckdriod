@@ -14,6 +14,7 @@ pub enum AppMode {
     Settings,
     EmulatorSelect,
     NoHardwareHelp,
+    PickProject,
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]

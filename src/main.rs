@@ -211,6 +211,13 @@ async fn main() -> Result<()> {
 
     if !std::path::Path::new(".deckdriodconfig").exists() { state.mode = AppMode::Welcome; }
 
+    // If no valid Android project found, ask user to pick one
+    let gradlew_path = std::path::Path::new(&config.project_path).join("gradlew");
+    if !gradlew_path.exists() {
+        state.mode = AppMode::PickProject;
+        state.input_buffer = config.project_path.clone();
+    }
+
     let devices = commands::get_devices().await.unwrap_or_default();
     if devices.is_empty() {
         let avds = commands::get_avds().await.unwrap_or_default();
@@ -625,6 +632,26 @@ async fn main() -> Result<()> {
                                 }
                             }
                             AppMode::NoHardwareHelp => { if key.code == KeyCode::Esc || key.code == KeyCode::Char('q') || key.code == KeyCode::Enter { app.state.mode = AppMode::Normal; } }
+                            AppMode::PickProject => {
+                                match key.code {
+                                    KeyCode::Enter => {
+                                        let path = app.state.input_buffer.trim().to_string();
+                                        let gradlew = std::path::Path::new(&path).join("gradlew");
+                                        if gradlew.exists() {
+                                            app.config.project_path = path;
+                                            let _ = app.config.save();
+                                            app.state.mode = AppMode::Normal;
+                                            let _ = tx_log.send(format!("[ok] project path set: {}", app.config.project_path));
+                                        } else {
+                                            let _ = tx_log.send(format!("[err] no gradlew found in: {}", path));
+                                        }
+                                    }
+                                    KeyCode::Esc => { app.state.mode = AppMode::Normal; }
+                                    KeyCode::Char(c) => { app.state.input_buffer.push(c); }
+                                    KeyCode::Backspace => { app.state.input_buffer.pop(); }
+                                    _ => {}
+                                }
+                            }
                         }
                     }
                 }
@@ -1002,5 +1029,28 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
         f.render_widget(Clear, area);
         let help = vec![Line::from(vec![Span::styled(" No Android Devices Detected ", Style::default().fg(Color::Red).bold())]), Line::from(vec![Span::raw("")]), Line::from(vec![Span::styled("1. Connect device via USB", Style::default().bold())]), Line::from(vec![Span::styled("2. Create emulator (AVD)", Style::default().bold())]), Line::from(vec![Span::raw("")]), Line::from(vec![Span::raw("sdkmanager \"system-images;android-33;google_apis;arm64-v8a\"")]), Line::from(vec![Span::raw("avdmanager create avd -n MyDevice -k \"system-images;android-33;google_apis;arm64-v8a\"")]), Line::from(vec![Span::styled("Press Esc to enter dashboard anyway.", Style::default().dark_gray())])];
         f.render_widget(Paragraph::new(help).block(Block::default().borders(Borders::ALL).title(" Hardware Help ").border_style(Style::default().fg(Color::Red))).wrap(Wrap { trim: true }), area);
+    }
+
+    if app.state.mode == AppMode::PickProject {
+        let area = centered_rect(70, 30, f.area());
+        f.render_widget(Clear, area);
+        let chunks = Layout::default().direction(Direction::Vertical)
+            .constraints([Constraint::Min(0), Constraint::Length(3)])
+            .split(area);
+        let msg = vec![
+            Line::from(Span::styled(" No Android project found (gradlew missing)", Style::default().fg(Color::Yellow).bold())),
+            Line::from(Span::raw("")),
+            Line::from(Span::styled(" Enter the full path to your Android project root:", Style::default().fg(Color::White))),
+            Line::from(Span::styled(" (the directory containing gradlew)", Style::default().fg(Color::DarkGray))),
+        ];
+        f.render_widget(
+            Paragraph::new(msg).block(Block::default().borders(Borders::ALL).title(" Pick Project Path ").border_style(Style::default().fg(Color::Yellow))),
+            chunks[0],
+        );
+        f.render_widget(
+            Paragraph::new(format!("{}_", app.state.input_buffer))
+                .block(Block::default().borders(Borders::ALL).title(" Path ").border_style(Style::default().fg(Color::Cyan))),
+            chunks[1],
+        );
     }
 }
