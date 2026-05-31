@@ -91,28 +91,40 @@ async fn message_handler(
             "result": {
                 "tools": [
                     {
-                        "name": "get_usage_guide",
-                        "description": "Returns the complete DeckDriod Knowledge Base, including architecture, hotkeys, and AI debugging prompts.",
-                        "inputSchema": { "type": "object", "properties": {} }
-                    },
-                    {
                         "name": "get_recent_logs",
-                        "description": "Returns the most recent application logs.",
+                        "description": "Returns recent app logcat lines. Filter by level: V/D/I/W/E.",
                         "inputSchema": {
                             "type": "object",
                             "properties": {
-                                "count": { "type": "integer", "description": "Number of lines", "default": 100 }
+                                "count": { "type": "integer", "description": "Number of lines (default 100)" },
+                                "level": { "type": "string", "description": "Min log level: V, D, I, W, E" },
+                                "filter": { "type": "string", "description": "Substring filter" }
                             }
                         }
                     },
                     {
+                        "name": "get_build_logs",
+                        "description": "Returns Gradle build output lines.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "count": { "type": "integer", "description": "Number of lines (default 50)" }
+                            }
+                        }
+                    },
+                    {
+                        "name": "get_build_status",
+                        "description": "Returns current build status: idle/building/success/failed and last build duration.",
+                        "inputSchema": { "type": "object", "properties": {} }
+                    },
+                    {
                         "name": "get_errors",
-                        "description": "Returns captured errors.",
+                        "description": "Returns all captured error and crash logs.",
                         "inputSchema": { "type": "object", "properties": {} }
                     },
                     {
                         "name": "get_latest_crash",
-                        "description": "Returns the last crash trace.",
+                        "description": "Returns the full stack trace of the last crash.",
                         "inputSchema": { "type": "object", "properties": {} }
                     }
                 ]
@@ -121,18 +133,46 @@ async fn message_handler(
         "tools/call" => {
             let tool_name = request["params"]["name"].as_str().unwrap_or("");
             let result = match tool_name {
-                "get_usage_guide" => {
-                    json!({ "content": [{ "type": "text", "text": get_detailed_guide(state.port) }] })
-                },
                 "get_recent_logs" => {
                     let count = request["params"]["arguments"]["count"].as_u64().unwrap_or(100) as usize;
+                    let level_filter = request["params"]["arguments"]["level"].as_str().unwrap_or("").to_uppercase();
+                    let substr = request["params"]["arguments"]["filter"].as_str().unwrap_or("").to_lowercase();
                     let logs = state.logs.read().unwrap();
-                    let start = logs.app_logs.len().saturating_sub(count);
-                    json!({ "content": [{ "type": "text", "text": logs.app_logs[start..].join("\n") }] })
+                    let level_rank = |l: &str| -> u8 {
+                        if l.contains(" E/") || l.contains("[err]") { 4 }
+                        else if l.contains(" W/") { 3 }
+                        else if l.contains(" I/") { 2 }
+                        else if l.contains(" D/") { 1 }
+                        else { 0 }
+                    };
+                    let min_rank: u8 = match level_filter.as_str() {
+                        "E" => 4, "W" => 3, "I" => 2, "D" => 1, _ => 0
+                    };
+                    let filtered: Vec<&String> = logs.app_logs.iter()
+                        .filter(|l| level_rank(l) >= min_rank)
+                        .filter(|l| substr.is_empty() || l.to_lowercase().contains(&substr))
+                        .collect();
+                    let start = filtered.len().saturating_sub(count);
+                    let text = filtered[start..].iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n");
+                    json!({ "content": [{ "type": "text", "text": text }] })
+                },
+                "get_build_logs" => {
+                    let count = request["params"]["arguments"]["count"].as_u64().unwrap_or(50) as usize;
+                    let logs = state.logs.read().unwrap();
+                    let start = logs.build_logs.len().saturating_sub(count);
+                    let text = logs.build_logs[start..].join("\n");
+                    json!({ "content": [{ "type": "text", "text": if text.is_empty() { "No build logs yet.".to_string() } else { text } }] })
+                },
+                "get_build_status" => {
+                    let logs = state.logs.read().unwrap();
+                    let status = if logs.build_status.is_empty() { "idle" } else { &logs.build_status };
+                    let task = logs.build_task.as_deref().unwrap_or("none");
+                    json!({ "content": [{ "type": "text", "text": format!("status: {}\ncurrent_task: {}", status, task) }] })
                 },
                 "get_errors" => {
                     let logs = state.logs.read().unwrap();
-                    json!({ "content": [{ "type": "text", "text": logs.error_logs.join("\n") }] })
+                    let text = if logs.error_logs.is_empty() { "No errors.".to_string() } else { logs.error_logs.join("\n") };
+                    json!({ "content": [{ "type": "text", "text": text }] })
                 },
                 "get_latest_crash" => {
                     let logs = state.logs.read().unwrap();

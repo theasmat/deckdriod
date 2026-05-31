@@ -114,6 +114,9 @@ impl App {
                 if entry.contains("[build]") || entry.contains("[build-err]") {
                     self.cache_build.push(entry.clone());
                     if self.cache_build.len() > 5000 { self.cache_build.remove(0); }
+                    let mut shared = self.state.shared_logs.write().unwrap();
+                    shared.build_logs.push(entry.clone());
+                    if shared.build_logs.len() > 1000 { shared.build_logs.remove(0); }
                 } else {
                     self.cache_app.push(entry.clone());
                     if self.cache_app.len() > 5000 { self.cache_app.remove(0); }
@@ -313,7 +316,12 @@ async fn main() -> Result<()> {
             }
             Some(evt) = rx_build.recv() => {
                 match evt {
-                    BuildEvent::Task(t) => { app.state.build_task = Some(t); }
+                    BuildEvent::Task(t) => {
+                        app.state.build_task = Some(t.clone());
+                        let mut shared = app.state.shared_logs.write().unwrap();
+                        shared.build_task = Some(t);
+                        shared.build_status = "Building".to_string();
+                    }
                     BuildEvent::Complete(d) => {
                         app.state.build_task = None;
                         app.state.build_history.push_back(d);
@@ -322,15 +330,17 @@ async fn main() -> Result<()> {
                         app.state.autoscroll = true;
                         app.refresh_filter_cache();
                         let mut shared = app.state.shared_logs.write().unwrap();
-                        shared.build_status = "Success".to_string();
+                        shared.build_status = format!("Success ({:.1}s)", d.as_secs_f32());
+                        shared.build_task = None;
                     }
                     BuildEvent::Failed => {
                         app.state.build_task = None;
-                        app.state.current_tab = Tab::Build; // show errors immediately
+                        app.state.current_tab = Tab::Build;
                         app.state.autoscroll = true;
                         app.refresh_filter_cache();
                         let mut shared = app.state.shared_logs.write().unwrap();
                         shared.build_status = "Failed".to_string();
+                        shared.build_task = None;
                     }
                 }
             }
@@ -646,9 +656,57 @@ async fn main() -> Result<()> {
                                             let _ = tx_log.send(format!("[err] no gradlew found in: {}", path));
                                         }
                                     }
+                                    KeyCode::Char('b') => {
+                                        // Open dir browser
+                                        let start = if app.state.input_buffer.is_empty() || app.state.input_buffer == "." {
+                                            dirs::home_dir().map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|| "/".to_string())
+                                        } else { app.state.input_buffer.clone() };
+                                        app.state.dir_picker_cwd = start.clone();
+                                        app.state.dir_picker_entries = load_dir_entries(&start);
+                                        app.state.dir_picker_idx = 0;
+                                        app.state.mode = AppMode::DirPicker;
+                                    }
                                     KeyCode::Esc => { app.state.mode = AppMode::Normal; }
                                     KeyCode::Char(c) => { app.state.input_buffer.push(c); }
                                     KeyCode::Backspace => { app.state.input_buffer.pop(); }
+                                    _ => {}
+                                }
+                            }
+                            AppMode::DirPicker => {
+                                match key.code {
+                                    KeyCode::Esc => { app.state.mode = AppMode::PickProject; }
+                                    KeyCode::Up | KeyCode::Char('k') => {
+                                        app.state.dir_picker_idx = app.state.dir_picker_idx.saturating_sub(1);
+                                    }
+                                    KeyCode::Down | KeyCode::Char('j') => {
+                                        let max = app.state.dir_picker_entries.len().saturating_sub(1);
+                                        app.state.dir_picker_idx = (app.state.dir_picker_idx + 1).min(max);
+                                    }
+                                    KeyCode::Enter => {
+                                        if let Some(entry) = app.state.dir_picker_entries.get(app.state.dir_picker_idx).cloned() {
+                                            let new_path = if entry == ".." {
+                                                std::path::Path::new(&app.state.dir_picker_cwd)
+                                                    .parent()
+                                                    .map(|p| p.to_string_lossy().to_string())
+                                                    .unwrap_or_else(|| "/".to_string())
+                                            } else {
+                                                format!("{}/{}", app.state.dir_picker_cwd.trim_end_matches('/'), entry)
+                                            };
+                                            // Check if this dir has gradlew
+                                            if std::path::Path::new(&new_path).join("gradlew").exists() {
+                                                app.config.project_path = new_path.clone();
+                                                let _ = app.config.save();
+                                                app.state.input_buffer = new_path.clone();
+                                                app.state.mode = AppMode::Normal;
+                                                let _ = tx_log.send(format!("[ok] project path set: {}", app.config.project_path));
+                                            } else {
+                                                // Navigate into it
+                                                app.state.dir_picker_cwd = new_path.clone();
+                                                app.state.dir_picker_entries = load_dir_entries(&new_path);
+                                                app.state.dir_picker_idx = 0;
+                                            }
+                                        }
+                                    }
                                     _ => {}
                                 }
                             }
@@ -663,6 +721,21 @@ async fn main() -> Result<()> {
     execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
     log_manager.stop();
     Ok(())
+}
+
+fn load_dir_entries(path: &str) -> Vec<String> {
+    let mut entries = vec!["..".to_string()];
+    if let Ok(rd) = std::fs::read_dir(path) {
+        let mut dirs: Vec<String> = rd
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+            .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        dirs.sort();
+        entries.extend(dirs);
+    }
+    entries
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
@@ -1040,8 +1113,8 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
         let msg = vec![
             Line::from(Span::styled(" No Android project found (gradlew missing)", Style::default().fg(Color::Yellow).bold())),
             Line::from(Span::raw("")),
-            Line::from(Span::styled(" Enter the full path to your Android project root:", Style::default().fg(Color::White))),
-            Line::from(Span::styled(" (the directory containing gradlew)", Style::default().fg(Color::DarkGray))),
+            Line::from(Span::styled(" Type path or press [b] to browse directories", Style::default().fg(Color::White))),
+            Line::from(Span::styled(" Press Enter to confirm, Esc to dismiss", Style::default().fg(Color::DarkGray))),
         ];
         f.render_widget(
             Paragraph::new(msg).block(Block::default().borders(Borders::ALL).title(" Pick Project Path ").border_style(Style::default().fg(Color::Yellow))),
@@ -1049,8 +1122,65 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
         );
         f.render_widget(
             Paragraph::new(format!("{}_", app.state.input_buffer))
-                .block(Block::default().borders(Borders::ALL).title(" Path ").border_style(Style::default().fg(Color::Cyan))),
+                .block(Block::default().borders(Borders::ALL).title(" Path (Enter=confirm  b=browse) ").border_style(Style::default().fg(Color::Cyan))),
             chunks[1],
+        );
+    }
+
+    if app.state.mode == AppMode::DirPicker {
+        let area = centered_rect(75, 70, f.area());
+        f.render_widget(Clear, area);
+        let chunks = Layout::default().direction(Direction::Vertical)
+            .constraints([Constraint::Length(1), Constraint::Min(0), Constraint::Length(1)])
+            .split(area);
+
+        // Title bar
+        f.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled(" Browse: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(app.state.dir_picker_cwd.clone(), Style::default().fg(Color::Cyan).bold()),
+            ])).block(Block::default().borders(Borders::TOP | Borders::LEFT | Borders::RIGHT).border_style(Style::default().fg(Color::Cyan))),
+            chunks[0],
+        );
+
+        // Directory list
+        let height = chunks[1].height as usize;
+        let total = app.state.dir_picker_entries.len();
+        let idx = app.state.dir_picker_idx;
+        let scroll = if idx >= height { idx - height + 1 } else { 0 };
+        let items: Vec<ListItem> = app.state.dir_picker_entries.iter().enumerate()
+            .skip(scroll).take(height)
+            .map(|(i, name)| {
+                let has_gradlew = i > 0 && std::path::Path::new(&format!("{}/{}", app.state.dir_picker_cwd.trim_end_matches('/'), name)).join("gradlew").exists();
+                let style = if i == idx {
+                    if has_gradlew { Style::default().fg(Color::Black).bg(Color::Green).bold() }
+                    else { Style::default().fg(Color::Black).bg(Color::Cyan).bold() }
+                } else if has_gradlew {
+                    Style::default().fg(Color::Green)
+                } else if name == ".." {
+                    Style::default().fg(Color::Yellow)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+                let icon = if has_gradlew { " [A] " } else if name == ".." { "  .. " } else { "  /  " };
+                ListItem::new(Line::from(vec![
+                    Span::styled(icon, style),
+                    Span::styled(name.clone(), style),
+                ]))
+            }).collect();
+        f.render_widget(
+            List::new(items).block(Block::default().borders(Borders::LEFT | Borders::RIGHT).border_style(Style::default().fg(Color::Cyan))),
+            chunks[1],
+        );
+
+        // Footer
+        f.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled(" [↑↓/jk] Navigate  [Enter] Select/Descend  [Esc] Back", Style::default().fg(Color::DarkGray)),
+                Span::styled("  [A]=Android project", Style::default().fg(Color::Green)),
+                Span::styled(format!("  {}/{}", idx + 1, total), Style::default().fg(Color::DarkGray)),
+            ])).block(Block::default().borders(Borders::BOTTOM | Borders::LEFT | Borders::RIGHT).border_style(Style::default().fg(Color::Cyan))),
+            chunks[2],
         );
     }
 }

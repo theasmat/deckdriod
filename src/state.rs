@@ -15,6 +15,7 @@ pub enum AppMode {
     EmulatorSelect,
     NoHardwareHelp,
     PickProject,
+    DirPicker,
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -60,6 +61,8 @@ pub struct SharedLogState {
     pub error_logs: Vec<String>,
     pub last_crash: Option<String>,
     pub build_status: String,
+    pub build_logs: Vec<String>,
+    pub build_task: Option<String>,
 }
 
 #[derive(Clone)]
@@ -97,6 +100,11 @@ pub struct AppState {
     pub mcp_server_active: bool,
     pub mcp_port: u16,
     pub shared_logs: Arc<RwLock<SharedLogState>>,
+
+    // Dir picker
+    pub dir_picker_cwd: String,
+    pub dir_picker_entries: Vec<String>,
+    pub dir_picker_idx: usize,
 }
 
 impl Default for AppState {
@@ -132,6 +140,9 @@ impl Default for AppState {
             mcp_server_active: false,
             mcp_port: 3000,
             shared_logs: Arc::new(RwLock::new(SharedLogState::default())),
+            dir_picker_cwd: String::new(),
+            dir_picker_entries: Vec::new(),
+            dir_picker_idx: 0,
         }
     }
 }
