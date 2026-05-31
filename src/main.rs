@@ -820,7 +820,6 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
             let mut scroll = app.state.log_scroll;
             if scroll >= total && total > 0 { scroll = total.saturating_sub(1); }
 
-            // Build the bordered block and get inner area for log lines
             let search_indicator = if !app.state.search_query.is_empty() {
                 format!(" /\"{}\" ", app.state.search_query)
             } else { String::new() };
@@ -842,15 +841,8 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
             f.render_widget(block, main_area);
             app.state.log_area_rect = inner;
 
-            let height = inner.height as usize;
-            let width = inner.width as usize;
-            let end = (scroll + height).min(total);
-            let visible = if scroll < total { &logs[scroll..end] } else { &[] };
-
-            let lines: Vec<Line> = visible.iter().enumerate().map(|(i, l)| {
-                let idx = scroll + i;
-                // Truncate to terminal width to prevent overflow artifacts
-                let display = if l.len() > width { format!("{}…", &l[..width.saturating_sub(1)]) } else { l.clone() };
+            // Build ALL styled lines (no manual truncation - let Paragraph+Wrap handle it)
+            let all_lines: Vec<Line> = logs.iter().enumerate().map(|(idx, l)| {
                 let mut style = if l.contains("[err]") || l.contains("[build-err]") || l.contains(" E/") || l.contains(" FATAL") {
                     Style::default().fg(Color::Red)
                 } else if l.contains("[ok]") {
@@ -867,11 +859,16 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
                 if let (Some(s), Some(e)) = (app.state.selection_start, app.state.selection_end) {
                     if idx >= s.min(e) && idx <= s.max(e) { style = style.bg(Color::Blue).fg(Color::White); }
                 }
-                // Dim boilerplate stack trace lines
                 if l.starts_with("at ") || l.starts_with("\tat ") { style = Style::default().fg(Color::DarkGray); }
-                Line::from(Span::styled(display, style))
+                Line::from(Span::styled(l.clone(), style))
             }).collect();
-            f.render_widget(Paragraph::new(lines), inner);
+
+            f.render_widget(
+                Paragraph::new(all_lines)
+                    .wrap(Wrap { trim: false })
+                    .scroll((scroll as u16, 0)),
+                inner,
+            );
         }
     }
 
