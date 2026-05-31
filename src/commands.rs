@@ -75,33 +75,44 @@ pub async fn build_and_launch(
     tx_build: mpsc::UnboundedSender<BuildEvent>
 ) -> Result<()> {
     let start_time = Instant::now();
-    let _ = tx_log.send(if force_rebuild { "[build] starting (force)..." } else { "[build] starting..." }.to_string());
+    let _ = tx_log.send(if force_rebuild { "[build] starting (force clean)..." } else { "[build] starting..." }.to_string());
     
     let project_path = Path::new(&config.project_path);
     if !project_path.exists() {
-        let _ = tx_log.send(format!("[err] project path does not exist: {}", config.project_path));
+        let _ = tx_log.send(format!("[err] project path not found: {}", config.project_path));
+        let _ = tx_build.send(BuildEvent::Failed);
         return Ok(());
     }
 
-    let mut args = vec![
-        ":androidApp:installDebug",
-        "--parallel",
-        "--configuration-cache",
-        "--daemon",
-    ];
+    // Check gradlew exists
+    let gradlew = project_path.join("gradlew");
+    if !gradlew.exists() {
+        let _ = tx_log.send(format!("[err] gradlew not found in: {}", config.project_path));
+        let _ = tx_build.send(BuildEvent::Failed);
+        return Ok(());
+    }
 
+    let mut args: Vec<&str> = vec![":androidApp:installDebug", "--parallel"];
     if force_rebuild {
         args.insert(0, "clean");
         args.push("--no-build-cache");
     }
 
-    let mut child = Command::new("./gradlew")
+    let mut child = match Command::new("./gradlew")
         .args(&args)
         .current_dir(project_path)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .spawn()?;
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = tx_log.send(format!("[err] failed to start gradlew: {}", e));
+            let _ = tx_build.send(BuildEvent::Failed);
+            return Ok(());
+        }
+    };
 
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();
@@ -114,7 +125,7 @@ pub async fn build_and_launch(
         let mut reader = BufReader::new(stdout).lines();
         while let Ok(Some(line)) = reader.next_line().await {
             if line.starts_with("> Task ") {
-                let _ = tx_b.send(BuildEvent::Task(line.clone()));
+                let _ = tx_b.send(BuildEvent::Task(line.trim_start_matches("> Task ").to_string()));
             }
             let _ = tx_out.send(format!("[build] {}", line));
         }
@@ -123,46 +134,56 @@ pub async fn build_and_launch(
     tokio::spawn(async move {
         let mut reader = BufReader::new(stderr).lines();
         while let Ok(Some(line)) = reader.next_line().await {
-            let _ = tx_err.send(format!("[build-err] {}", line));
+            if !line.trim().is_empty() {
+                let _ = tx_err.send(format!("[build-err] {}", line));
+            }
         }
     });
 
-    let status = child.wait().await?;
+    // 10 minute timeout — prevents infinite "building..." state
+    let status = tokio::time::timeout(
+        std::time::Duration::from_secs(600),
+        child.wait()
+    ).await;
 
-    if status.success() {
-        let duration = start_time.elapsed();
-        let _ = tx_build.send(BuildEvent::Complete(duration));
-        let _ = tx_log.send(format!("[ok] build successful in {:.2}s", duration.as_secs_f32()));
-        
-        if auto_open && !serials.is_empty() {
-            let mut tasks = Vec::new();
-            for serial in serials {
-                let s = serial.clone();
-                let cfg = config.clone();
-                let log_tx = tx_log.clone();
-                tasks.push(tokio::spawn(async move {
-                    let _ = Command::new("adb")
-                        .args(["-s", &s, "shell", "am", "force-stop", &cfg.app_id])
-                        .stdin(Stdio::null())
-                        .status()
-                        .await;
-                    
-                    let _ = Command::new("adb")
-                        .args(["-s", &s, "shell", "am", "start", "-n", &cfg.activity])
-                        .stdin(Stdio::null())
-                        .status()
-                        .await;
-                    
-                    let _ = log_tx.send(format!("[ok] launched on {}", s));
-                }));
-            }
-            join_all(tasks).await;
+    match status {
+        Err(_) => {
+            let _ = child.start_kill();
+            let _ = tx_log.send("[err] build timed out after 10 minutes".to_string());
+            let _ = tx_build.send(BuildEvent::Failed);
+            return Ok(());
         }
-    } else {
-        let _ = tx_build.send(BuildEvent::Failed);
-        let _ = tx_log.send("[err] build failed".to_string());
+        Ok(Err(e)) => {
+            let _ = tx_log.send(format!("[err] build process error: {}", e));
+            let _ = tx_build.send(BuildEvent::Failed);
+            return Ok(());
+        }
+        Ok(Ok(exit_status)) => {
+            if exit_status.success() {
+                let duration = start_time.elapsed();
+                let _ = tx_build.send(BuildEvent::Complete(duration));
+                let _ = tx_log.send(format!("[ok] build successful in {:.2}s", duration.as_secs_f32()));
+                if auto_open && !serials.is_empty() {
+                    let mut tasks = Vec::new();
+                    for serial in serials {
+                        let s = serial.clone();
+                        let cfg = config.clone();
+                        let log_tx = tx_log.clone();
+                        tasks.push(tokio::spawn(async move {
+                            let _ = Command::new("adb").args(["-s", &s, "shell", "am", "force-stop", &cfg.app_id]).stdin(Stdio::null()).status().await;
+                            let _ = Command::new("adb").args(["-s", &s, "shell", "am", "start", "-n", &cfg.activity]).stdin(Stdio::null()).status().await;
+                            let _ = log_tx.send(format!("[ok] launched on {}", s));
+                        }));
+                    }
+                    join_all(tasks).await;
+                }
+            } else {
+                let _ = tx_build.send(BuildEvent::Failed);
+                let _ = tx_log.send("[err] build FAILED — check [3] Build tab for details".to_string());
+            }
+        }
     }
-    
+
     Ok(())
 }
 

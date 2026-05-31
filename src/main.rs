@@ -317,7 +317,14 @@ async fn main() -> Result<()> {
                         let mut shared = app.state.shared_logs.write().unwrap();
                         shared.build_status = "Success".to_string();
                     }
-                    BuildEvent::Failed => { app.state.build_task = None; let mut shared = app.state.shared_logs.write().unwrap(); shared.build_status = "Failed".to_string(); }
+                    BuildEvent::Failed => {
+                        app.state.build_task = None;
+                        app.state.current_tab = Tab::Build; // show errors immediately
+                        app.state.autoscroll = true;
+                        app.refresh_filter_cache();
+                        let mut shared = app.state.shared_logs.write().unwrap();
+                        shared.build_status = "Failed".to_string();
+                    }
                 }
             }
             Some(_) = rx_watch.recv() => {
