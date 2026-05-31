@@ -75,6 +75,10 @@ impl App {
             self.state.is_capturing_crash = true;
             let mut shared = self.state.shared_logs.write().unwrap();
             shared.last_crash = Some(l.clone());
+        } else if l.contains("ANR in") || l.contains("Application Not Responding") {
+            self.state.last_crash = Some(format!("[ANR] {}", l));
+            let mut shared = self.state.shared_logs.write().unwrap();
+            shared.last_crash = Some(format!("[ANR] {}", l));
         } else if self.state.is_capturing_crash {
             if l.starts_with("at ") || l.starts_with("\tat ") || l.contains("Caused by:") {
                 if let Some(ref mut trace) = self.state.last_crash_trace {
@@ -497,6 +501,34 @@ async fn main() -> Result<()> {
                                             let _ = log_tx.send("[ok] app killed".to_string());
                                         });
                                     }
+                                    (KeyCode::Char('p'), _) => {
+                                        // Find Android projects in common locations
+                                        let home = std::env::var("HOME").unwrap_or_default();
+                                        let search_paths = vec![
+                                            format!("{}/Projects", home),
+                                            format!("{}/AndroidStudioProjects", home),
+                                            format!("{}/workspace", home),
+                                        ];
+                                        let mut projects = Vec::new();
+                                        for base in search_paths {
+                                            if let Ok(entries) = std::fs::read_dir(&base) {
+                                                for entry in entries.flatten() {
+                                                    if entry.path().join("gradlew").exists() {
+                                                        if let Some(name) = entry.path().to_str() {
+                                                            projects.push(name.to_string());
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        if !projects.is_empty() {
+                                            app.state.project_list = projects;
+                                            app.state.mode = AppMode::ProjectPicker;
+                                            app.state.project_picker_idx = 0;
+                                        } else {
+                                            let _ = tx_log.send("[err] no Android projects found".to_string());
+                                        }
+                                    }
                                     (KeyCode::Char('E'), _) => {
                                         if let Ok(avds) = commands::get_avds().await {
                                             if !avds.is_empty() { app.state.available_avds = avds; app.state.mode = AppMode::EmulatorSelect; app.state.settings_index = 0; } 
@@ -542,11 +574,23 @@ async fn main() -> Result<()> {
                                         tokio::spawn(async move { let _ = commands::clear_app_data(&cfg, serials, auto_open, log_tx).await; });
                                     }
                                     (KeyCode::Char('e'), _) => {
-                                        let content = app.logs.iter().cloned().collect::<Vec<_>>().join("\n");
-                                        let _ = std::fs::write("deckdriod_export.txt", content);
-                                        let _ = tx_log.send("[ok] logs exported to deckdriod_export.txt".to_string());
+                                        app.state.mode = AppMode::ExportFormat;
+                                        app.state.settings_index = 0;
                                     }
                                     (KeyCode::Char('/'), _) => { app.state.mode = AppMode::Search; app.state.input_buffer.clear(); }
+                                    (KeyCode::Char('*'), _) => {
+                                        let cache = app.get_current_cache();
+                                        if app.state.log_scroll < cache.len() {
+                                            let line = &cache[app.state.log_scroll];
+                                            // Extract word under cursor - simple word boundary detection
+                                            let words: Vec<&str> = line.split_whitespace().collect();
+                                            if let Some(word) = words.get(0) {
+                                                app.state.search_query = word.to_string();
+                                                app.state.search_match_idx = 0;
+                                                app.refresh_filter_cache();
+                                            }
+                                        }
+                                    }
                                     (KeyCode::Char('n'), _) => {
                                         if !app.state.search_query.is_empty() {
                                             let cache = app.get_current_cache();
@@ -727,6 +771,52 @@ async fn main() -> Result<()> {
                                         app.state.device_serial = None;
                                         let msg = if app.state.is_broadcast { "[ok] broadcast mode ON" } else { "[ok] broadcast mode OFF" };
                                         let _ = tx_log.send(msg.to_string());
+                                        app.state.mode = AppMode::Normal;
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            AppMode::ExportFormat => {
+                                match key.code {
+                                    KeyCode::Esc | KeyCode::Char('q') => { app.state.mode = AppMode::Normal; }
+                                    KeyCode::Up | KeyCode::Char('k') => app.state.settings_index = app.state.settings_index.saturating_sub(1),
+                                    KeyCode::Down | KeyCode::Char('j') => app.state.settings_index = (app.state.settings_index + 1).min(2),
+                                    KeyCode::Enter => {
+                                        let cache = app.get_current_cache();
+                                        let filename = match app.state.settings_index {
+                                            0 => {
+                                                let content = cache.join("\n");
+                                                std::fs::write("deckdriod_export.txt", content).ok();
+                                                "deckdriod_export.txt"
+                                            }
+                                            1 => {
+                                                let json: Vec<serde_json::Value> = cache.iter().map(|line| serde_json::json!({"log": line})).collect();
+                                                std::fs::write("deckdriod_export.json", serde_json::to_string_pretty(&json).unwrap_or_default()).ok();
+                                                "deckdriod_export.json"
+                                            }
+                                            2 => {
+                                                let csv = cache.iter().map(|line| format!("\"{}\"", line.replace("\"", "\"\""))).collect::<Vec<_>>().join("\n");
+                                                std::fs::write("deckdriod_export.csv", format!("log\n{}", csv)).ok();
+                                                "deckdriod_export.csv"
+                                            }
+                                            _ => "deckdriod_export.txt"
+                                        };
+                                        let _ = tx_log.send(format!("[ok] logs exported to {}", filename));
+                                        app.state.mode = AppMode::Normal;
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            AppMode::ProjectPicker => {
+                                match key.code {
+                                    KeyCode::Esc | KeyCode::Char('q') => { app.state.mode = AppMode::Normal; }
+                                    KeyCode::Up | KeyCode::Char('k') => app.state.project_picker_idx = app.state.project_picker_idx.saturating_sub(1),
+                                    KeyCode::Down | KeyCode::Char('j') => app.state.project_picker_idx = (app.state.project_picker_idx + 1).min(app.state.project_list.len().saturating_sub(1)),
+                                    KeyCode::Enter => {
+                                        let path = app.state.project_list[app.state.project_picker_idx].clone();
+                                        app.config.project_path = path.clone();
+                                        let _ = app.config.save();
+                                        let _ = tx_log.send(format!("[ok] switched to project: {}", path));
                                         app.state.mode = AppMode::Normal;
                                     }
                                     _ => {}
@@ -1231,6 +1321,30 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
         items.push(ListItem::new(Line::from(vec![Span::styled("", Style::default())])));
         items.push(ListItem::new(Line::from(vec![Span::styled("[b] Broadcast to ALL devices", if app.state.is_broadcast { Style::default().fg(Color::Green).bold() } else { Style::default().fg(Color::DarkGray) })])));
         f.render_widget(List::new(items).block(Block::default().borders(Borders::ALL).title(" Select Device ").border_style(Style::default().fg(Color::Yellow))), area);
+    }
+
+    if app.state.mode == AppMode::ExportFormat {
+        let area = centered_rect(50, 30, f.area());
+        f.render_widget(Clear, area);
+        let formats = vec!["Text (.txt)", "JSON (.json)", "CSV (.csv)"];
+        let items: Vec<ListItem> = formats.iter().enumerate().map(|(i, name)| {
+            let mut style = Style::default();
+            if i == app.state.settings_index { style = style.fg(Color::Yellow).bold(); }
+            ListItem::new(Line::from(vec![Span::styled(format!("> {}", name), style)]))
+        }).collect();
+        f.render_widget(List::new(items).block(Block::default().borders(Borders::ALL).title(" Export Format ").border_style(Style::default().fg(Color::Yellow))), area);
+    }
+
+    if app.state.mode == AppMode::ProjectPicker {
+        let area = centered_rect(70, 60, f.area());
+        f.render_widget(Clear, area);
+        let items: Vec<ListItem> = app.state.project_list.iter().enumerate().map(|(i, path)| {
+            let mut style = Style::default();
+            if i == app.state.project_picker_idx { style = style.fg(Color::Yellow).bold(); }
+            let name = std::path::Path::new(path).file_name().and_then(|n| n.to_str()).unwrap_or(path);
+            ListItem::new(Line::from(vec![Span::styled(format!("> {}", name), style)]))
+        }).collect();
+        f.render_widget(List::new(items).block(Block::default().borders(Borders::ALL).title(" Switch Project ").border_style(Style::default().fg(Color::Yellow))), area);
     }
 
     if app.state.mode == AppMode::NoHardwareHelp {

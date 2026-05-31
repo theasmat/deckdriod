@@ -17,6 +17,8 @@ pub enum AppMode {
     PickProject,
     DirPicker,
     DevicePicker,
+    ExportFormat,
+    ProjectPicker,
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -112,6 +114,10 @@ pub struct AppState {
     // Device switcher
     pub available_devices: Vec<(String, String)>, // (serial, model)
     pub device_picker_idx: usize,
+    
+    // Project switcher
+    pub project_list: Vec<String>,
+    pub project_picker_idx: usize,
 }
 
 impl Default for AppState {
@@ -154,6 +160,8 @@ impl Default for AppState {
             dir_picker_target: 0,
             available_devices: Vec::new(),
             device_picker_idx: 0,
+            project_list: Vec::new(),
+            project_picker_idx: 0,
         }
     }
 }
