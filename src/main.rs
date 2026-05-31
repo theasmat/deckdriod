@@ -18,7 +18,7 @@ use crossterm::{
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout, Rect, Alignment},
-    style::{Color, Style, Stylize},
+    style::{Color, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, Paragraph, Wrap, Sparkline, Clear, Tabs},
     Terminal,
@@ -632,42 +632,80 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
     let area = f.area();
     f.render_widget(Clear, area);
     if area.height < 5 || area.width < 10 { f.render_widget(Paragraph::new("Terminal too small").alignment(Alignment::Center), area); return; }
-    let mut main_constraints = vec![Constraint::Length(2), Constraint::Length(3), Constraint::Min(0), Constraint::Length(1)];
-    if area.height < 15 { main_constraints.remove(0); }
-    if area.height < 10 { main_constraints.remove(0); }
-    if app.state.mode == AppMode::Search || app.state.mode == AppMode::Input || app.state.mode == AppMode::DeepLink { let insert_idx = if main_constraints.len() == 4 { 2 } else if main_constraints.len() == 3 { 1 } else { 0 }; main_constraints.insert(insert_idx, Constraint::Length(3)); }
+    let has_input = matches!(app.state.mode, AppMode::Search | AppMode::Input | AppMode::DeepLink);
+    // header(3 with border) + tabs(3) + [input(3)] + main(min) + footer(2 with border)
+    let mut main_constraints = vec![
+        Constraint::Length(3),  // header
+        Constraint::Length(3),  // tabs
+        Constraint::Min(0),     // main content
+        Constraint::Length(2),  // footer
+    ];
+    if has_input { main_constraints.insert(2, Constraint::Length(3)); }
     let chunks = Layout::default().direction(Direction::Vertical).constraints(main_constraints).split(area);
     let mut current_idx = 0;
 
-    if area.height >= 15 {
-        let battery_span = match app.state.stats.battery_level { Some(l) => Span::styled(format!("BAT:{}%", l), if l < 20 { Style::default().fg(Color::Red) } else { Style::default().fg(Color::Green) }), None => Span::raw("BAT:--%").dark_gray() };
-        let broadcast_span = if app.state.is_broadcast { Span::styled(" [BROADCAST] ", Style::default().bg(Color::Red).fg(Color::White).bold()) } else { Span::raw("") };
-        let mcp_span = if app.state.mcp_server_active { Span::styled(format!(" [MCP:{}] ", app.state.mcp_port), Style::default().bg(Color::Blue).fg(Color::White).bold()) } else { Span::raw("") };
-        let header_line = Line::from(vec![
+    {
+        let bat = match app.state.stats.battery_level {
+            Some(l) => Span::styled(format!(" BAT:{}%", l), if l < 20 { Style::default().fg(Color::Red).bold() } else { Style::default().fg(Color::Green) }),
+            None => Span::styled(" BAT:--%", Style::default().fg(Color::DarkGray)),
+        };
+        let device_str = app.state.device_serial.as_deref().unwrap_or("no device");
+        // Truncate app_id to fit: reserve ~60 chars for left side
+        let max_id = (area.width as usize).saturating_sub(70);
+        let app_id = &app.config.app_id;
+        let app_id_display = if app_id.len() > max_id && max_id > 3 {
+            format!("{}...", &app_id[..max_id.saturating_sub(3)])
+        } else { app_id.clone() };
+
+        let mut spans = vec![
             Span::styled(" DeckDriod ", Style::default().bold().fg(Color::Cyan)),
-            Span::raw(format!("({}) ", app.state.device_serial.as_deref().unwrap_or("none"))),
-            battery_span,
-            broadcast_span,
-            mcp_span,
-            Span::raw(" | Mouse:"), Span::raw(if app.state.mouse_captured { "APP" } else { "NATIVE" }).bold(),
-            Span::raw(" | Watch:"), Span::raw(if app.state.auto_rebuild { "ON" } else { "OFF" }).bold(),
-            Span::raw(" Open:"), Span::raw(if app.state.auto_open { "ON" } else { "OFF" }).bold(),
-            Span::raw(format!(" | App:{}", app.config.app_id)).dark_gray(),
-        ]);
-        f.render_widget(Paragraph::new(header_line), chunks[current_idx]);
+            Span::styled(format!("v{} ", env!("CARGO_PKG_VERSION")), Style::default().fg(Color::DarkGray)),
+            Span::styled(format!(" {} ", device_str), Style::default().fg(Color::White)),
+            bat,
+            Span::styled(format!("  CPU:{:.0}%", app.state.stats.last_cpu), Style::default().fg(Color::Green)),
+            Span::styled(format!("  MEM:{:.0}%", app.state.stats.last_mem), Style::default().fg(Color::Blue)),
+            Span::styled("  |", Style::default().fg(Color::DarkGray)),
+            Span::styled(format!(" Watch:{}", if app.state.auto_rebuild { "ON" } else { "OFF" }), if app.state.auto_rebuild { Style::default().fg(Color::Green) } else { Style::default().fg(Color::DarkGray) }),
+            Span::styled(format!(" Open:{}", if app.state.auto_open { "ON" } else { "OFF" }), if app.state.auto_open { Style::default().fg(Color::Green) } else { Style::default().fg(Color::DarkGray) }),
+            Span::styled("  |", Style::default().fg(Color::DarkGray)),
+        ];
+        if app.state.is_broadcast { spans.push(Span::styled(" [BROADCAST]", Style::default().bg(Color::Red).fg(Color::White).bold())); }
+        if app.state.mcp_server_active { spans.push(Span::styled(format!(" [MCP:{}]", app.state.mcp_port), Style::default().bg(Color::Blue).fg(Color::White).bold())); }
+        if app.state.is_recording { spans.push(Span::styled(" [REC]", Style::default().bg(Color::Red).fg(Color::White).bold())); }
+        spans.push(Span::styled(format!("  {}", app_id_display), Style::default().fg(Color::DarkGray)));
+
+        f.render_widget(
+            Paragraph::new(Line::from(spans))
+                .block(Block::default().borders(Borders::BOTTOM).border_style(Style::default().fg(Color::DarkGray))),
+            chunks[current_idx],
+        );
         current_idx += 1;
     }
 
-    if area.height >= 10 {
-        let tab_titles = vec![" [1] Dashboard ", " [2] App Logs ", " [3] Build ", " [4] Errors "];
-        let tabs = Tabs::new(tab_titles).block(Block::default().borders(Borders::ALL)).select(match app.state.current_tab { Tab::Dashboard => 0, Tab::App => 1, Tab::Build => 2, Tab::Errors => 3 }).style(Style::default().fg(Color::DarkGray)).highlight_style(Style::default().fg(Color::Yellow).bold());
+    {
+        let tab_titles = vec![
+            " [1] Dashboard ".to_string(),
+            format!(" [2] App ({}) ", app.cache_app.len()),
+            format!(" [3] Build ({}) ", app.cache_build.len()),
+            format!(" [4] Errors ({}) ", app.cache_err.len()),
+        ];
+        let selected = match app.state.current_tab { Tab::Dashboard => 0, Tab::App => 1, Tab::Build => 2, Tab::Errors => 3 };
+        let tabs = Tabs::new(tab_titles)
+            .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::DarkGray)))
+            .select(selected)
+            .style(Style::default().fg(Color::DarkGray))
+            .highlight_style(Style::default().fg(Color::Black).bg(Color::Cyan).bold());
         f.render_widget(tabs, chunks[current_idx]);
         current_idx += 1;
     }
 
-    if app.state.mode == AppMode::Search || app.state.mode == AppMode::Input || app.state.mode == AppMode::DeepLink {
-        let title = match app.state.mode { AppMode::Search => " Search Logs ", AppMode::DeepLink => " Deep Link URL ", _ => " Input " };
-        f.render_widget(Paragraph::new(app.state.input_buffer.as_str()).block(Block::default().borders(Borders::ALL).title(title).border_style(Style::default().fg(Color::Yellow))), chunks[current_idx]);
+    if has_input {
+        let title = match app.state.mode { AppMode::Search => " / Search ", AppMode::DeepLink => " Deep Link URL ", _ => " Input " };
+        f.render_widget(
+            Paragraph::new(format!("{}_", app.state.input_buffer))
+                .block(Block::default().borders(Borders::ALL).title(title).border_style(Style::default().fg(Color::Yellow))),
+            chunks[current_idx],
+        );
         current_idx += 1;
     }
 
@@ -676,47 +714,189 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
 
     match app.state.current_tab {
         Tab::Dashboard => {
-            let dash_chunks = Layout::default().direction(Direction::Vertical).constraints([Constraint::Length(7), Constraint::Min(0)]).split(main_area);
-            let stats_layout = Layout::default().direction(Direction::Horizontal).constraints([Constraint::Percentage(50), Constraint::Percentage(50)]).split(dash_chunks[0]);
-            let truncate = |s: &str, max: usize| { if s.len() > max { format!("{}...", &s[..max.saturating_sub(3)]) } else { s.to_string() } };
-            let cpu_title = if let Some(ref t) = app.state.build_task { format!(" BUILD: {} ", truncate(t, (stats_layout[0].width as usize).saturating_sub(10))) } else { format!(" CPU: {:.1}% ", app.state.stats.last_cpu) };
-            let mem_title = format!(" MEM: {:.1}% ", app.state.stats.last_mem);
-            f.render_widget(Sparkline::default().block(Block::default().borders(Borders::ALL).title(cpu_title)).data(&app.state.stats.cpu_usage.iter().map(|&v| (v * 10.0) as u64).collect::<Vec<_>>()).style(Style::default().fg(Color::Green)), stats_layout[0]);
-            let mem_data: Vec<u64> = app.state.stats.mem_usage.iter().map(|&v| (v * 10.0) as u64).collect();
-            f.render_widget(Sparkline::default().block(Block::default().borders(Borders::ALL).title(mem_title)).data(&mem_data).style(Style::default().fg(Color::Blue)), stats_layout[1]);
+            // Responsive: stats(30%) | history(15%) | commands(rest)
+            let dash_chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Percentage(30), Constraint::Percentage(15), Constraint::Min(0)])
+                .split(main_area);
 
-            let cmd_block = Block::default().borders(Borders::ALL).title(" Quick Commands ");
-            let inner_cmd_area = cmd_block.inner(dash_chunks[1]);
-            f.render_widget(cmd_block, dash_chunks[1]);
-            let cmd_layout = Layout::default().direction(Direction::Horizontal).constraints([Constraint::Percentage(33), Constraint::Percentage(33), Constraint::Percentage(33)]).split(inner_cmd_area);
-            let col1 = vec![Line::from(vec![Span::styled(" [a/r/Ent] ", Style::default().fg(Color::Cyan).bold()), Span::raw("Build/Launch")]), Line::from(vec![Span::styled(" [f]       ", Style::default().fg(Color::Cyan).bold()), Span::raw("Force Rebuild")]), Line::from(vec![Span::styled(" [v]       ", Style::default().fg(Color::Cyan).bold()), Span::raw("Record Video")]), Line::from(vec![Span::styled(" [x]       ", Style::default().fg(Color::Cyan).bold()), Span::raw("Clear Data")]), Line::from(vec![Span::styled(" [/]       ", Style::default().fg(Color::Cyan).bold()), Span::raw("Search")])];
-            let col2 = vec![Line::from(vec![Span::styled(" [L]       ", Style::default().fg(Color::Cyan).bold()), Span::raw("Launch Only")]), Line::from(vec![Span::styled(" [u]       ", Style::default().fg(Color::Cyan).bold()), Span::raw("Deep Link")]), Line::from(vec![Span::styled(" [c]       ", Style::default().fg(Color::Cyan).bold()), Span::raw("Clear Logs")]), Line::from(vec![Span::styled(" [B]       ", Style::default().fg(Color::Cyan).bold()), Span::raw("Broadcast Toggle")])];
-            let col3 = vec![Line::from(vec![Span::styled(" [s]       ", Style::default().fg(Color::Cyan).bold()), Span::raw("Screenshot")]), Line::from(vec![Span::styled(" [b]       ", Style::default().fg(Color::Cyan).bold()), Span::raw("Toggle Bounds")]), Line::from(vec![Span::styled(" [i]       ", Style::default().fg(Color::Cyan).bold()), Span::raw("Settings")]), Line::from(vec![Span::styled(" [M]       ", Style::default().fg(Color::Cyan).bold()), Span::raw("MCP Toggle")])];
+            // ── Stats row ──────────────────────────────────────────────
+            let stats_layout = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                .split(dash_chunks[0]);
+
+            let cpu_title = if let Some(ref t) = app.state.build_task {
+                let max = (stats_layout[0].width as usize).saturating_sub(6);
+                let t = if t.len() > max { format!("{}...", &t[..max.saturating_sub(3)]) } else { t.clone() };
+                format!(" BUILD: {} ", t)
+            } else {
+                format!(" CPU {:.1}% ", app.state.stats.last_cpu)
+            };
+            let cpu_data: Vec<u64> = app.state.stats.cpu_usage.iter().map(|&v| (v * 10.0) as u64).collect();
+            f.render_widget(
+                Sparkline::default()
+                    .block(Block::default().borders(Borders::ALL).title(cpu_title).border_style(Style::default().fg(Color::Green)))
+                    .data(&cpu_data)
+                    .style(Style::default().fg(Color::Green)),
+                stats_layout[0],
+            );
+            let mem_data: Vec<u64> = app.state.stats.mem_usage.iter().map(|&v| (v * 10.0) as u64).collect();
+            f.render_widget(
+                Sparkline::default()
+                    .block(Block::default().borders(Borders::ALL).title(format!(" MEM {:.1}% ", app.state.stats.last_mem)).border_style(Style::default().fg(Color::Blue)))
+                    .data(&mem_data)
+                    .style(Style::default().fg(Color::Blue)),
+                stats_layout[1],
+            );
+
+            // ── Build history ──────────────────────────────────────────
+            let history_block = Block::default().borders(Borders::ALL).title(" Build History ").border_style(Style::default().fg(Color::DarkGray));
+            let inner_hist = history_block.inner(dash_chunks[1]);
+            f.render_widget(history_block, dash_chunks[1]);
+            if app.state.build_history.is_empty() {
+                f.render_widget(Paragraph::new("  No builds yet. Press [a] to build.").style(Style::default().fg(Color::DarkGray)), inner_hist);
+            } else {
+                let hist_spans: Vec<Span> = app.state.build_history.iter().enumerate().map(|(i, d)| {
+                    let secs = d.as_secs_f64();
+                    let color = if secs < 30.0 { Color::Green } else if secs < 90.0 { Color::Yellow } else { Color::Red };
+                    Span::styled(format!("  #{} {:.1}s", i + 1, secs), Style::default().fg(color))
+                }).collect();
+                f.render_widget(Paragraph::new(Line::from(hist_spans)), inner_hist);
+            }
+
+            // ── Commands grid ──────────────────────────────────────────
+            let cmd_block = Block::default().borders(Borders::ALL).title(" Quick Commands ").border_style(Style::default().fg(Color::DarkGray));
+            let inner_cmd = cmd_block.inner(dash_chunks[2]);
+            f.render_widget(cmd_block, dash_chunks[2]);
+
+            // Responsive: wide = 3 cols, narrow = 2 cols
+            let use_3_cols = area.width >= 80;
+            let cmd_layout = if use_3_cols {
+                Layout::default().direction(Direction::Horizontal)
+                    .constraints([Constraint::Percentage(33), Constraint::Percentage(33), Constraint::Percentage(34)])
+                    .split(inner_cmd)
+            } else {
+                Layout::default().direction(Direction::Horizontal)
+                    .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                    .split(inner_cmd)
+            };
+
+            let k = |key: &str, desc: &str| -> Line<'static> {
+                Line::from(vec![
+                    Span::styled(format!(" {:<10}", key), Style::default().fg(Color::Cyan).bold()),
+                    Span::styled(desc.to_string(), Style::default().fg(Color::White)),
+                ])
+            };
+            let col1 = vec![k("[a/r/Enter]", "Build & Launch"), k("[f]", "Force Rebuild"), k("[L]", "Launch Only"), k("[c]", "Clear Logs"), k("[/]", "Search")];
+            let col2 = vec![k("[s]", "Screenshot"), k("[v]", "Record Video"), k("[x]", "Clear Data"), k("[u]", "Deep Link"), k("[b]", "Layout Bounds")];
+            let col3 = vec![k("[B]", "Broadcast"), k("[M]", "MCP Toggle"), k("[E]", "Emulator"), k("[i]", "Settings"), k("[h]", "Help")];
+
             f.render_widget(Paragraph::new(col1), cmd_layout[0]);
-            f.render_widget(Paragraph::new(col2), cmd_layout[1]);
-            f.render_widget(Paragraph::new(col3), cmd_layout[2]);
+            if use_3_cols {
+                f.render_widget(Paragraph::new(col2), cmd_layout[1]);
+                f.render_widget(Paragraph::new(col3), cmd_layout[2]);
+            } else {
+                // Merge col2+col3 into second column
+                let mut merged = col2;
+                merged.extend(col3);
+                f.render_widget(Paragraph::new(merged), cmd_layout[1]);
+            }
         }
         _ => {
-            let logs = match app.state.current_tab { Tab::Dashboard => unreachable!(), Tab::App => &app.cache_app, Tab::Build => &app.cache_build, Tab::Errors => &app.cache_err };
-            let height = main_area.height as usize;
+            let logs = match app.state.current_tab {
+                Tab::Dashboard => unreachable!(),
+                Tab::App => &app.cache_app,
+                Tab::Build => &app.cache_build,
+                Tab::Errors => &app.cache_err,
+            };
+            let tab_label = match app.state.current_tab {
+                Tab::App => "App Logs",
+                Tab::Build => "Build Logs",
+                Tab::Errors => "Errors",
+                Tab::Dashboard => unreachable!(),
+            };
             let total = logs.len();
             let mut scroll = app.state.log_scroll;
             if scroll >= total && total > 0 { scroll = total.saturating_sub(1); }
+
+            // Build the bordered block and get inner area for log lines
+            let search_indicator = if !app.state.search_query.is_empty() {
+                format!(" /\"{}\" ", app.state.search_query)
+            } else { String::new() };
+            let level_label = match app.state.min_log_level {
+                LogLevel::Verbose => "V+", LogLevel::Debug => "D+",
+                LogLevel::Info => "I+", LogLevel::Warn => "W+", LogLevel::Error => "E",
+            };
+            let scroll_info = if app.state.autoscroll {
+                format!(" FOLLOW | {}{} | {} lines ", search_indicator, level_label, total)
+            } else {
+                format!(" PAUSED {}/{} | {}{} | {} lines ", scroll + 1, total, search_indicator, level_label, total)
+            };
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .title(format!(" {} ", tab_label))
+                .title_bottom(scroll_info.as_str())
+                .border_style(Style::default().fg(Color::DarkGray));
+            let inner = block.inner(main_area);
+            f.render_widget(block, main_area);
+            app.state.log_area_rect = inner;
+
+            let height = inner.height as usize;
+            let width = inner.width as usize;
             let end = (scroll + height).min(total);
             let visible = if scroll < total { &logs[scroll..end] } else { &[] };
+
             let lines: Vec<Line> = visible.iter().enumerate().map(|(i, l)| {
                 let idx = scroll + i;
-                let mut style = if l.contains("[err]") || l.contains("[build-err]") || l.contains(" E/") { Style::default().fg(Color::Red) } else if l.contains("[ok]") { Style::default().fg(Color::Green) } else if l.contains("[build]") || l.contains(" W/") { Style::default().fg(Color::Yellow) } else if l.contains(" I/") { Style::default().fg(Color::Cyan) } else { Style::default() };
-                if let (Some(s), Some(e)) = (app.state.selection_start, app.state.selection_end) { if idx >= s.min(e) && idx <= s.max(e) { style = style.bg(Color::Blue).fg(Color::White); } }
-                if l.starts_with("at ") || l.starts_with("\tat ") || l.contains("...") { style = Style::default().fg(Color::DarkGray); }
-                Line::from(Span::styled(l, style))
+                // Truncate to terminal width to prevent overflow artifacts
+                let display = if l.len() > width { format!("{}…", &l[..width.saturating_sub(1)]) } else { l.clone() };
+                let mut style = if l.contains("[err]") || l.contains("[build-err]") || l.contains(" E/") || l.contains(" FATAL") {
+                    Style::default().fg(Color::Red)
+                } else if l.contains("[ok]") {
+                    Style::default().fg(Color::Green)
+                } else if l.contains("[build]") || l.contains(" W/") {
+                    Style::default().fg(Color::Yellow)
+                } else if l.contains(" I/") {
+                    Style::default().fg(Color::Cyan)
+                } else if l.contains("[info]") {
+                    Style::default().fg(Color::Blue)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+                if let (Some(s), Some(e)) = (app.state.selection_start, app.state.selection_end) {
+                    if idx >= s.min(e) && idx <= s.max(e) { style = style.bg(Color::Blue).fg(Color::White); }
+                }
+                // Dim boilerplate stack trace lines
+                if l.starts_with("at ") || l.starts_with("\tat ") { style = Style::default().fg(Color::DarkGray); }
+                Line::from(Span::styled(display, style))
             }).collect();
-            f.render_widget(Paragraph::new(lines), main_area);
+            f.render_widget(Paragraph::new(lines), inner);
         }
     }
 
-    let footer = Line::from(vec![Span::raw(" [Tab] Views | [m] Mouse:"), Span::raw(if app.state.mouse_captured { "APP" } else { "NATIVE" }).bold(), Span::raw(" | "), Span::raw(if app.state.autoscroll { "FOLLOW" } else { "PAUSED" }).bold(), Span::raw(" | [h] Help").dark_gray()]);
-    f.render_widget(Paragraph::new(footer), chunks[chunks.len() - 1]);
+    let crash_span = if app.state.last_crash.is_some() {
+        Span::styled(" [CRASH] ", Style::default().bg(Color::Red).fg(Color::White).bold())
+    } else { Span::raw("") };
+    let build_span = if let Some(ref t) = app.state.build_task {
+        let short = if t.len() > 30 { format!("{}...", &t[..29]) } else { t.clone() };
+        Span::styled(format!(" [BUILD: {}] ", short), Style::default().fg(Color::Yellow).bold())
+    } else { Span::raw("") };
+    let footer_line = Line::from(vec![
+        Span::styled(" [1-4] Tabs", Style::default().fg(Color::DarkGray)),
+        Span::styled("  [/] Search", Style::default().fg(Color::DarkGray)),
+        Span::styled("  [G] Follow", Style::default().fg(Color::DarkGray)),
+        Span::styled("  [h] Help", Style::default().fg(Color::DarkGray)),
+        Span::styled("  [q] Quit", Style::default().fg(Color::DarkGray)),
+        Span::raw("   "),
+        build_span,
+        crash_span,
+    ]);
+    f.render_widget(
+        Paragraph::new(footer_line)
+            .block(Block::default().borders(Borders::TOP).border_style(Style::default().fg(Color::DarkGray))),
+        chunks[chunks.len() - 1],
+    );
 
     if app.state.mode == AppMode::Help || app.state.mode == AppMode::Welcome {
         let area = centered_rect(70, 80, f.area());
