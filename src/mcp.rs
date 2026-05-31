@@ -91,40 +91,22 @@ async fn message_handler(
             "result": {
                 "tools": [
                     {
-                        "name": "get_recent_logs",
-                        "description": "Returns recent app logcat lines. Filter by level: V/D/I/W/E.",
+                        "name": "get_logs",
+                        "description": "Fetch logs by type. type: 'app' (logcat), 'build' (gradle), 'errors' (E/ + crashes), 'all' (everything), 'crash' (last crash trace).",
                         "inputSchema": {
                             "type": "object",
+                            "required": ["type"],
                             "properties": {
-                                "count": { "type": "integer", "description": "Number of lines (default 100)" },
-                                "level": { "type": "string", "description": "Min log level: V, D, I, W, E" },
-                                "filter": { "type": "string", "description": "Substring filter" }
-                            }
-                        }
-                    },
-                    {
-                        "name": "get_build_logs",
-                        "description": "Returns Gradle build output lines.",
-                        "inputSchema": {
-                            "type": "object",
-                            "properties": {
-                                "count": { "type": "integer", "description": "Number of lines (default 50)" }
+                                "type":   { "type": "string", "enum": ["app","build","errors","all","crash"] },
+                                "count":  { "type": "integer", "description": "Max lines to return (default 100)" },
+                                "level":  { "type": "string",  "description": "Min log level for app logs: V D I W E" },
+                                "filter": { "type": "string",  "description": "Substring filter" }
                             }
                         }
                     },
                     {
                         "name": "get_build_status",
-                        "description": "Returns current build status: idle/building/success/failed and last build duration.",
-                        "inputSchema": { "type": "object", "properties": {} }
-                    },
-                    {
-                        "name": "get_errors",
-                        "description": "Returns all captured error and crash logs.",
-                        "inputSchema": { "type": "object", "properties": {} }
-                    },
-                    {
-                        "name": "get_latest_crash",
-                        "description": "Returns the full stack trace of the last crash.",
+                        "description": "Returns current build state: idle/Building/Success/Failed, current Gradle task, and history.",
                         "inputSchema": { "type": "object", "properties": {} }
                     }
                 ]
@@ -133,13 +115,15 @@ async fn message_handler(
         "tools/call" => {
             let tool_name = request["params"]["name"].as_str().unwrap_or("");
             let result = match tool_name {
-                "get_recent_logs" => {
-                    let count = request["params"]["arguments"]["count"].as_u64().unwrap_or(100) as usize;
+                "get_logs" => {
+                    let log_type = request["params"]["arguments"]["type"].as_str().unwrap_or("app");
+                    let count    = request["params"]["arguments"]["count"].as_u64().unwrap_or(100) as usize;
                     let level_filter = request["params"]["arguments"]["level"].as_str().unwrap_or("").to_uppercase();
-                    let substr = request["params"]["arguments"]["filter"].as_str().unwrap_or("").to_lowercase();
+                    let substr   = request["params"]["arguments"]["filter"].as_str().unwrap_or("").to_lowercase();
                     let logs = state.logs.read().unwrap();
+
                     let level_rank = |l: &str| -> u8 {
-                        if l.contains(" E/") || l.contains("[err]") { 4 }
+                        if l.contains(" E/") || l.contains("[err]") || l.contains("FATAL") { 4 }
                         else if l.contains(" W/") { 3 }
                         else if l.contains(" I/") { 2 }
                         else if l.contains(" D/") { 1 }
@@ -148,20 +132,46 @@ async fn message_handler(
                     let min_rank: u8 = match level_filter.as_str() {
                         "E" => 4, "W" => 3, "I" => 2, "D" => 1, _ => 0
                     };
-                    let filtered: Vec<&String> = logs.app_logs.iter()
-                        .filter(|l| level_rank(l) >= min_rank)
-                        .filter(|l| substr.is_empty() || l.to_lowercase().contains(&substr))
-                        .collect();
-                    let start = filtered.len().saturating_sub(count);
-                    let text = filtered[start..].iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n");
+
+                    let text = match log_type {
+                        "crash" => logs.last_crash.clone().unwrap_or_else(|| "No crash detected.".to_string()),
+                        "build" => {
+                            let src = logs.build_logs.iter()
+                                .filter(|l| substr.is_empty() || l.to_lowercase().contains(&substr))
+                                .collect::<Vec<_>>();
+                            let start = src.len().saturating_sub(count);
+                            if src.is_empty() { "No build logs yet.".to_string() }
+                            else { src[start..].iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n") }
+                        },
+                        "errors" => {
+                            let src = logs.error_logs.iter()
+                                .filter(|l| substr.is_empty() || l.to_lowercase().contains(&substr))
+                                .collect::<Vec<_>>();
+                            let start = src.len().saturating_sub(count);
+                            if src.is_empty() { "No errors.".to_string() }
+                            else { src[start..].iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n") }
+                        },
+                        "all" => {
+                            let mut all: Vec<&String> = logs.app_logs.iter().chain(logs.build_logs.iter()).collect();
+                            all.sort_unstable(); // rough chronological order by content
+                            let filtered: Vec<_> = all.iter()
+                                .filter(|l| level_rank(l) >= min_rank)
+                                .filter(|l| substr.is_empty() || l.to_lowercase().contains(&substr))
+                                .collect();
+                            let start = filtered.len().saturating_sub(count);
+                            filtered[start..].iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n")
+                        },
+                        _ => { // "app" default
+                            let filtered: Vec<_> = logs.app_logs.iter()
+                                .filter(|l| level_rank(l) >= min_rank)
+                                .filter(|l| substr.is_empty() || l.to_lowercase().contains(&substr))
+                                .collect();
+                            let start = filtered.len().saturating_sub(count);
+                            if filtered.is_empty() { "No app logs yet.".to_string() }
+                            else { filtered[start..].iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n") }
+                        }
+                    };
                     json!({ "content": [{ "type": "text", "text": text }] })
-                },
-                "get_build_logs" => {
-                    let count = request["params"]["arguments"]["count"].as_u64().unwrap_or(50) as usize;
-                    let logs = state.logs.read().unwrap();
-                    let start = logs.build_logs.len().saturating_sub(count);
-                    let text = logs.build_logs[start..].join("\n");
-                    json!({ "content": [{ "type": "text", "text": if text.is_empty() { "No build logs yet.".to_string() } else { text } }] })
                 },
                 "get_build_status" => {
                     let logs = state.logs.read().unwrap();
@@ -169,15 +179,26 @@ async fn message_handler(
                     let task = logs.build_task.as_deref().unwrap_or("none");
                     json!({ "content": [{ "type": "text", "text": format!("status: {}\ncurrent_task: {}", status, task) }] })
                 },
+                // keep old names as aliases for backwards compat
+                "get_recent_logs" => {
+                    let count = request["params"]["arguments"]["count"].as_u64().unwrap_or(100) as usize;
+                    let logs = state.logs.read().unwrap();
+                    let start = logs.app_logs.len().saturating_sub(count);
+                    json!({ "content": [{ "type": "text", "text": logs.app_logs[start..].join("\n") }] })
+                },
+                "get_build_logs" => {
+                    let count = request["params"]["arguments"]["count"].as_u64().unwrap_or(50) as usize;
+                    let logs = state.logs.read().unwrap();
+                    let start = logs.build_logs.len().saturating_sub(count);
+                    json!({ "content": [{ "type": "text", "text": logs.build_logs[start..].join("\n") }] })
+                },
                 "get_errors" => {
                     let logs = state.logs.read().unwrap();
-                    let text = if logs.error_logs.is_empty() { "No errors.".to_string() } else { logs.error_logs.join("\n") };
-                    json!({ "content": [{ "type": "text", "text": text }] })
+                    json!({ "content": [{ "type": "text", "text": logs.error_logs.join("\n") }] })
                 },
                 "get_latest_crash" => {
                     let logs = state.logs.read().unwrap();
-                    let crash = logs.last_crash.as_deref().unwrap_or("No crash detected.");
-                    json!({ "content": [{ "type": "text", "text": crash }] })
+                    json!({ "content": [{ "type": "text", "text": logs.last_crash.clone().unwrap_or_else(|| "No crash.".to_string()) }] })
                 },
                 _ => json!({ "isError": true, "content": [{ "type": "text", "text": format!("Unknown tool: {}", tool_name) }] })
             };
@@ -220,43 +241,53 @@ Toggle with **[M]** inside DeckDriod. Change port via `Settings [i]` or `.deckdr
 
 ## Available MCP Tools
 
-### `get_recent_logs`
-Returns recent app logcat lines.
-- `count` (int, default 100) — number of lines
-- `level` (string) — min log level: `V` `D` `I` `W` `E`
-- `filter` (string) — substring filter
+### `get_logs` — unified log access
+Fetch any log stream with optional filtering.
 
-### `get_build_logs`
-Returns Gradle build output.
-- `count` (int, default 50) — number of lines
+| param | type | description |
+|-------|------|-------------|
+| `type` | string **(required)** | `app` · `build` · `errors` · `all` · `crash` |
+| `count` | int | max lines (default 100) |
+| `level` | string | min level for app logs: `V` `D` `I` `W` `E` |
+| `filter` | string | substring filter |
+
+**Examples:**
+```
+get_logs(type="app")                        → last 100 logcat lines
+get_logs(type="app", level="E")             → only error lines
+get_logs(type="app", filter="NetworkError") → lines containing NetworkError
+get_logs(type="build")                      → last 100 gradle output lines
+get_logs(type="errors")                     → all E/ + crash lines
+get_logs(type="crash")                      → full last crash stack trace
+get_logs(type="all", count=200)             → app + build logs combined
+```
 
 ### `get_build_status`
-Returns current build state.
-- Output: `status: Building | Success (42.1s) | Failed | idle`
-- Output: `current_task: :app:compileDebugKotlin`
-
-### `get_errors`
-Returns all captured error-level and crash log lines.
-
-### `get_latest_crash`
-Returns the full stack trace of the last `FATAL EXCEPTION`.
+Returns current build state and active Gradle task.
+```
+status: Building | Success (42.1s) | Failed | idle
+current_task: :app:compileDebugKotlin
+```
 
 ## AI Prompts
 
 **Debug a crash:**
-> Use `get_latest_crash` to get the stack trace. Explain the root cause and which Kotlin file to fix.
+> Use `get_logs(type="crash")` to get the stack trace. Explain the root cause and which Kotlin file to fix.
 
 **Fix a failed build:**
-> Use `get_build_logs` to read the Gradle output. Find the error and suggest the fix.
+> Use `get_logs(type="build")` to read the Gradle output. Find the error and suggest the fix.
 
 **Check build progress:**
 > Use `get_build_status` to see what Gradle task is running and whether the build succeeded.
 
-**Analyze app errors:**
-> Use `get_errors` to list all recent errors. Group them by type and suggest fixes.
+**Analyze app errors only:**
+> Use `get_logs(type="errors")` to list all recent errors. Group them by type and suggest fixes.
 
-**Filter logs:**
-> Use `get_recent_logs` with `level: "E"` and `filter: "NetworkError"` to find network failures.
+**Filter specific logs:**
+> Use `get_logs(type="app", level="E", filter="Network")` to find network errors.
+
+**Full picture:**
+> Use `get_logs(type="all", count=200)` to see everything — app logs and build output together.
 
 ## Views
 | Key | View |
