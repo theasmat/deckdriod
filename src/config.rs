@@ -59,8 +59,8 @@ impl Config {
             }
         }
 
-        let app_id = map.get("APP_ID").cloned().unwrap();
-        let activity = map.get("ACTIVITY").cloned().unwrap_or_else(|| format!("{}/com.mfc.manager.android.MainActivity", app_id));
+        let app_id = map.get("APP_ID").cloned().unwrap_or_else(|| "com.example.app".to_string());
+        let activity = map.get("ACTIVITY").cloned().unwrap_or_else(|| format!("{}/.MainActivity", app_id));
         let watch_latency = map.get("WATCH_LATENCY").and_then(|s| s.parse().ok()).unwrap_or(1.0);
         let rebuild_gap = map.get("REBUILD_GAP").and_then(|s| s.parse().ok()).unwrap_or(2.0);
         let log_tag = map.get("LOG_TAG").cloned().unwrap_or_default();

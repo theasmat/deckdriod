@@ -115,8 +115,8 @@ pub async fn build_and_launch(
         }
     };
 
-    let stdout = child.stdout.take().unwrap();
-    let stderr = child.stderr.take().unwrap();
+    let stdout = child.stdout.take().expect("stdout not captured");
+    let stderr = child.stderr.take().expect("stderr not captured");
     
     let tx_out = tx_log.clone();
     let tx_err = tx_log.clone();
@@ -233,12 +233,13 @@ pub async fn take_screenshot(config: &Config, serials: Vec<String>, tx_log: mpsc
                 .await;
             
             let local_path = Path::new(&cfg.output_path).join(&filename);
-            
-            let _ = Command::new("adb")
-                .args(["-s", &s, "pull", &remote_path, local_path.to_str().unwrap()])
-                .stdin(Stdio::null())
-                .status()
-                .await;
+            if let Some(path_str) = local_path.to_str() {
+                let _ = Command::new("adb")
+                    .args(["-s", &s, "pull", &remote_path, path_str])
+                    .stdin(Stdio::null())
+                    .status()
+                    .await;
+            }
             
             let _ = Command::new("adb")
                 .args(["-s", &s, "shell", "rm", &remote_path])
@@ -340,7 +341,9 @@ impl Recorder {
                 tokio::time::sleep(Duration::from_secs(1)).await;
 
                 let local_path = Path::new(&cfg.output_path).join(&filename);
-                let _ = Command::new("adb").args(["-s", &serial, "pull", &remote_path, local_path.to_str().unwrap()]).status().await;
+                if let Some(path_str) = local_path.to_str() {
+                    let _ = Command::new("adb").args(["-s", &serial, "pull", &remote_path, path_str]).status().await;
+                }
                 let _ = Command::new("adb").args(["-s", &serial, "shell", "rm", &remote_path]).status().await;
                 
                 let _ = log_tx.send(format!("[ok] recording saved: {}/{}", cfg.output_path, filename));

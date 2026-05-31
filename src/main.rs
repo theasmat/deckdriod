@@ -47,7 +47,7 @@ impl App {
         Self {
             config,
             state,
-            logs: VecDeque::with_capacity(5000),
+            logs: VecDeque::with_capacity(2000),
             cache_all: Vec::new(),
             cache_app: Vec::new(),
             cache_build: Vec::new(),
@@ -56,13 +56,14 @@ impl App {
     }
 
     fn add_log(&mut self, log: String) {
-        if self.logs.len() >= 5000 {
+        if self.logs.len() >= 2000 {
             self.logs.pop_front();
         }
         
         let l = log.trim().to_string();
 
-        {
+        // Batch writes to shared_logs - only sync every 10 lines to reduce lock contention
+        if self.logs.len() % 10 == 0 {
             let mut shared = self.state.shared_logs.write().unwrap();
             shared.app_logs.push(l.clone());
             if shared.app_logs.len() > 1000 { shared.app_logs.remove(0); }
@@ -110,20 +111,20 @@ impl App {
             self.logs.push_back(entry.clone());
             if self.matches_filter(&entry) {
                 self.cache_all.push(entry.clone());
-                if self.cache_all.len() > 5000 { self.cache_all.remove(0); }
+                if self.cache_all.len() > 2000 { self.cache_all.remove(0); }
                 if entry.contains("[build]") || entry.contains("[build-err]") {
                     self.cache_build.push(entry.clone());
-                    if self.cache_build.len() > 5000 { self.cache_build.remove(0); }
+                    if self.cache_build.len() > 2000 { self.cache_build.remove(0); }
                     let mut shared = self.state.shared_logs.write().unwrap();
                     shared.build_logs.push(entry.clone());
                     if shared.build_logs.len() > 1000 { shared.build_logs.remove(0); }
                 } else {
                     self.cache_app.push(entry.clone());
-                    if self.cache_app.len() > 5000 { self.cache_app.remove(0); }
+                    if self.cache_app.len() > 2000 { self.cache_app.remove(0); }
                 }
                 if entry.contains(" E/") || entry.contains("[err]") || entry.contains("[build-err]") || entry.contains(" FATAL") {
                     self.cache_err.push(entry.clone());
-                    if self.cache_err.len() > 5000 { self.cache_err.remove(0); }
+                    if self.cache_err.len() > 2000 { self.cache_err.remove(0); }
                     let mut shared = self.state.shared_logs.write().unwrap();
                     shared.error_logs.push(entry.clone());
                     if shared.error_logs.len() > 500 { shared.error_logs.remove(0); }
@@ -911,9 +912,10 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
             let mut hist_lines: Vec<Line> = Vec::new();
             // Live build task
             if let Some(ref t) = app.state.build_task {
+                let elapsed = app.state.last_rebuild_at.map(|start| start.elapsed().as_secs()).unwrap_or(0);
                 hist_lines.push(Line::from(vec![
                     Span::styled(" BUILDING  ", Style::default().bg(Color::Yellow).fg(Color::Black).bold()),
-                    Span::styled(format!(" {}", t), Style::default().fg(Color::Yellow)),
+                    Span::styled(format!(" {} ({}s)", t, elapsed), Style::default().fg(Color::Yellow)),
                 ]));
             } else if !app.state.build_history.is_empty() {
                 let last = app.state.build_history.back().unwrap().as_secs_f64();

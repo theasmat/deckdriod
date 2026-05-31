@@ -39,8 +39,8 @@ impl LogcatManager {
             .stderr(Stdio::piped())
             .spawn()?;
             
-        let stdout = child.stdout.take().unwrap();
-        let stderr = child.stderr.take().unwrap();
+        let stdout = child.stdout.take().expect("stdout not captured");
+        let stderr = child.stderr.take().expect("stderr not captured");
         
         let tx_out = tx_log.clone();
         let tx_err = tx_log.clone();
