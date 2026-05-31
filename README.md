@@ -90,10 +90,14 @@ Simply run `deckdriod` in the root of your project, or configure a `PROJECT_PATH
 | `l` | **Launch Only**: Restarts the app without rebuilding. |
 | `d` | **Device Switcher**: Select from connected devices. |
 | `k` | **Kill App**: Force stop the app. |
+| `p` | **Project Switcher**: Switch between Android projects. |
+| `t` | **Build Variant**: Select debug/release/flavors. |
 | `E` | **Emulator Selector**: Select and launch an Android emulator. |
 | `M` (Shift+m) | **MCP Toggle**: Enable/Disable AI log analysis server. |
-| `e` | **Export Logs**: Save current log buffer to `deckdriod_export.txt`. |
+| `e` | **Export Logs**: Save current log buffer to txt/json/csv. |
 | `/` | Search Logs (Substring matching) |
+| `n` / `N` | Next/Previous search match |
+| `*` | Search word under cursor (Vim-style) |
 | `h` | Open Advanced Help Popup |
 | `c` | Clear Logs & Crash Alerts |
 | `i` | Open Interactive Settings Menu |
@@ -126,9 +130,11 @@ REBUILD_GAP=2.0
 PROJECT_PATH=/path/to/your/kotlin/project
 OUTPUT_PATH=/path/to/screenshots/folder
 MCP_PORT=3000
+BUILD_VARIANT=debug
 
 # Custom hotkeys (DECKDRIOD_CMD_<key>=command)
 DECKDRIOD_CMD_T="adb shell input text 'testuser'"
+DECKDRIOD_CMD_1="adb shell input text 'user1@example.com'"
 ```
 
 ---

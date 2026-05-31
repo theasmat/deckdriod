@@ -19,6 +19,7 @@ pub enum AppMode {
     DevicePicker,
     ExportFormat,
     ProjectPicker,
+    VariantPicker,
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -118,6 +119,10 @@ pub struct AppState {
     // Project switcher
     pub project_list: Vec<String>,
     pub project_picker_idx: usize,
+    
+    // Variant selector
+    pub variant_list: Vec<String>,
+    pub variant_picker_idx: usize,
 }
 
 impl Default for AppState {
@@ -162,6 +167,8 @@ impl Default for AppState {
             device_picker_idx: 0,
             project_list: Vec::new(),
             project_picker_idx: 0,
+            variant_list: Vec::new(),
+            variant_picker_idx: 0,
         }
     }
 }

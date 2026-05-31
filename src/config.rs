@@ -12,6 +12,7 @@ pub struct Config {
     pub project_path: String,
     pub output_path: String,
     pub mcp_port: u16,
+    pub build_variant: String,
     pub custom_commands: HashMap<char, String>,
 }
 
@@ -77,14 +78,15 @@ impl Config {
             project_path,
             output_path,
             mcp_port,
+            build_variant: map.get("BUILD_VARIANT").cloned().unwrap_or_else(|| "debug".to_string()),
             custom_commands,
         }
     }
 
     pub fn save(&self) -> std::io::Result<()> {
         let mut content = format!(
-            "APP_ID={}\nACTIVITY={}\nWATCH_LATENCY={:.1}\nREBUILD_GAP={:.1}\nLOG_TAG={}\nPROJECT_PATH={}\nOUTPUT_PATH={}\nMCP_PORT={}\n",
-            self.app_id, self.activity, self.watch_latency, self.rebuild_gap, self.log_tag, self.project_path, self.output_path, self.mcp_port
+            "APP_ID={}\nACTIVITY={}\nWATCH_LATENCY={:.1}\nREBUILD_GAP={:.1}\nLOG_TAG={}\nPROJECT_PATH={}\nOUTPUT_PATH={}\nMCP_PORT={}\nBUILD_VARIANT={}\n",
+            self.app_id, self.activity, self.watch_latency, self.rebuild_gap, self.log_tag, self.project_path, self.output_path, self.mcp_port, self.build_variant
         );
 
         for (key, val) in &self.custom_commands {

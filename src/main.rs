@@ -529,6 +529,17 @@ async fn main() -> Result<()> {
                                             let _ = tx_log.send("[err] no Android projects found".to_string());
                                         }
                                     }
+                                    (KeyCode::Char('t'), _) => {
+                                        // Common build variants
+                                        app.state.variant_list = vec![
+                                            "debug".to_string(),
+                                            "release".to_string(),
+                                            "debugAndroidTest".to_string(),
+                                            "releaseUnitTest".to_string(),
+                                        ];
+                                        app.state.mode = AppMode::VariantPicker;
+                                        app.state.variant_picker_idx = 0;
+                                    }
                                     (KeyCode::Char('E'), _) => {
                                         if let Ok(avds) = commands::get_avds().await {
                                             if !avds.is_empty() { app.state.available_avds = avds; app.state.mode = AppMode::EmulatorSelect; app.state.settings_index = 0; } 
@@ -578,6 +589,18 @@ async fn main() -> Result<()> {
                                         app.state.settings_index = 0;
                                     }
                                     (KeyCode::Char('/'), _) => { app.state.mode = AppMode::Search; app.state.input_buffer.clear(); }
+                                    (KeyCode::Char(':'), _) => {
+                                        if !app.config.custom_commands.is_empty() {
+                                            app.state.mode = AppMode::Input;
+                                            app.state.input_buffer.clear();
+                                            let _ = tx_log.send("[info] custom commands: type key to execute".to_string());
+                                            for (key, cmd) in &app.config.custom_commands {
+                                                let _ = tx_log.send(format!("[info]   {} = {}", key, cmd));
+                                            }
+                                        } else {
+                                            let _ = tx_log.send("[info] no custom commands defined (add DECKDRIOD_CMD_<key>=<command> to config)".to_string());
+                                        }
+                                    }
                                     (KeyCode::Char('*'), _) => {
                                         let cache = app.get_current_cache();
                                         if app.state.log_scroll < cache.len() {
@@ -817,6 +840,21 @@ async fn main() -> Result<()> {
                                         app.config.project_path = path.clone();
                                         let _ = app.config.save();
                                         let _ = tx_log.send(format!("[ok] switched to project: {}", path));
+                                        app.state.mode = AppMode::Normal;
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            AppMode::VariantPicker => {
+                                match key.code {
+                                    KeyCode::Esc | KeyCode::Char('q') => { app.state.mode = AppMode::Normal; }
+                                    KeyCode::Up | KeyCode::Char('k') => app.state.variant_picker_idx = app.state.variant_picker_idx.saturating_sub(1),
+                                    KeyCode::Down | KeyCode::Char('j') => app.state.variant_picker_idx = (app.state.variant_picker_idx + 1).min(app.state.variant_list.len().saturating_sub(1)),
+                                    KeyCode::Enter => {
+                                        let variant = app.state.variant_list[app.state.variant_picker_idx].clone();
+                                        app.config.build_variant = variant.clone();
+                                        let _ = app.config.save();
+                                        let _ = tx_log.send(format!("[ok] build variant set to: {}", variant));
                                         app.state.mode = AppMode::Normal;
                                     }
                                     _ => {}
@@ -1345,6 +1383,18 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
             ListItem::new(Line::from(vec![Span::styled(format!("> {}", name), style)]))
         }).collect();
         f.render_widget(List::new(items).block(Block::default().borders(Borders::ALL).title(" Switch Project ").border_style(Style::default().fg(Color::Yellow))), area);
+    }
+
+    if app.state.mode == AppMode::VariantPicker {
+        let area = centered_rect(50, 40, f.area());
+        f.render_widget(Clear, area);
+        let items: Vec<ListItem> = app.state.variant_list.iter().enumerate().map(|(i, variant)| {
+            let mut style = Style::default();
+            if i == app.state.variant_picker_idx { style = style.fg(Color::Yellow).bold(); }
+            let marker = if variant == &app.config.build_variant { "✓ " } else { "  " };
+            ListItem::new(Line::from(vec![Span::styled(format!("{}{}", marker, variant), style)]))
+        }).collect();
+        f.render_widget(List::new(items).block(Block::default().borders(Borders::ALL).title(" Build Variant ").border_style(Style::default().fg(Color::Yellow))), area);
     }
 
     if app.state.mode == AppMode::NoHardwareHelp {
