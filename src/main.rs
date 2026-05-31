@@ -59,6 +59,7 @@ impl App {
         if self.logs.len() >= 2000 {
             self.logs.pop_front();
         }
+        self.state.needs_redraw = true;
         
         let l = log.trim().to_string();
 
@@ -79,6 +80,10 @@ impl App {
             self.state.last_crash = Some(format!("[ANR] {}", l));
             let mut shared = self.state.shared_logs.write().unwrap();
             shared.last_crash = Some(format!("[ANR] {}", l));
+        } else if l.contains("OkHttp") && (l.contains(" --> ") || l.contains(" <-- ")) {
+            // Network request/response parsing - highlight in cache
+            let mut shared = self.state.shared_logs.write().unwrap();
+            shared.last_crash = Some(format!("[NET] {}", l));
         } else if self.state.is_capturing_crash {
             if l.starts_with("at ") || l.starts_with("\tat ") || l.contains("Caused by:") {
                 if let Some(ref mut trace) = self.state.last_crash_trace {
@@ -91,6 +96,11 @@ impl App {
                 self.state.is_capturing_crash = false;
                 if let Some(ref trace) = self.state.last_crash_trace {
                     let _ = std::fs::write("crash_report.txt", trace);
+                    // Add to crash history
+                    self.state.crash_history.push(trace.clone());
+                    if self.state.crash_history.len() > 10 {
+                        self.state.crash_history.remove(0);
+                    }
                 }
             }
         }
@@ -288,8 +298,11 @@ async fn main() -> Result<()> {
     let mut mcp_shutdown_tx: Option<mpsc::Sender<()>> = None;
 
     loop {
-        if last_draw.elapsed() >= std::time::Duration::from_millis(33) {
+        // Lazy rendering - only redraw on state change or every 1s for stats
+        let should_draw = app.state.needs_redraw || last_draw.elapsed() >= std::time::Duration::from_secs(1);
+        if should_draw {
             terminal.draw(|f| ui(f, &mut app))?;
+            app.state.needs_redraw = false;
             last_draw = std::time::Instant::now();
         }
 
@@ -302,6 +315,7 @@ async fn main() -> Result<()> {
                         log_manager.stop();
                         app.state.device_serial = None;
                         app.state.stats = state::SystemStats::default();
+                        app.state.needs_redraw = true;
                         let _ = tx_log.send("[info] device disconnected".to_string());
                     } else {
                         // Device still connected — restart logcat if it died
@@ -332,6 +346,7 @@ async fn main() -> Result<()> {
                 match evt {
                     BuildEvent::Task(t) => {
                         app.state.build_task = Some(t.clone());
+                        app.state.needs_redraw = true;
                         let mut shared = app.state.shared_logs.write().unwrap();
                         shared.build_task = Some(t);
                         shared.build_status = "Building".to_string();
@@ -437,6 +452,11 @@ async fn main() -> Result<()> {
                                         if let Some(ref serial) = app.state.device_serial { let _ = log_manager.start(serial, &app.config.app_id, tx_log.clone()).await; }
                                     }
                                     (KeyCode::Char('h'), _) => { app.state.mode = AppMode::Help; }
+                                    (KeyCode::Char('H'), _) => {
+                                        if app.state.current_tab == Tab::Errors {
+                                            app.state.show_crash_history = !app.state.show_crash_history;
+                                        }
+                                    }
                                     (KeyCode::Char('?'), _) => { app.state.mode = AppMode::Help; }
                                     (KeyCode::Char('l'), KeyModifiers::CONTROL) => {
                                         app.logs.clear(); app.cache_all.clear(); app.cache_app.clear(); app.cache_build.clear(); app.cache_err.clear();
@@ -1203,6 +1223,34 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
             } // end else (not building)
         }
         _ => {
+            // Show crash history if enabled in Errors tab
+            if app.state.current_tab == Tab::Errors && app.state.show_crash_history {
+                let block = Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Crash History (press H to close) ")
+                    .border_style(Style::default().fg(Color::Red));
+                let inner = block.inner(main_area);
+                f.render_widget(block, main_area);
+                
+                let lines: Vec<Line> = if app.state.crash_history.is_empty() {
+                    vec![Line::from(Span::styled("  No crashes recorded", Style::default().fg(Color::DarkGray)))]
+                } else {
+                    app.state.crash_history.iter().enumerate().flat_map(|(i, crash)| {
+                        let mut result = vec![
+                            Line::from(Span::styled(format!("━━━ Crash #{} ━━━", i + 1), Style::default().fg(Color::Yellow).bold())),
+                        ];
+                        for line in crash.lines() {
+                            result.push(Line::from(Span::styled(line, Style::default().fg(Color::Red))));
+                        }
+                        result.push(Line::from(""));
+                        result
+                    }).collect()
+                };
+                
+                f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }).scroll((app.state.log_scroll as u16, 0)), inner);
+                return;
+            }
+            
             let logs = match app.state.current_tab {
                 Tab::Dashboard => unreachable!(),
                 Tab::App => &app.cache_app,

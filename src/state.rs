@@ -3,6 +3,19 @@ use std::time::Duration;
 use std::sync::{Arc, RwLock};
 use ratatui::layout::Rect;
 
+#[derive(Clone)]
+pub struct LogEntry {
+    pub text: String,
+    pub level: Option<LogLevel>,
+}
+
+impl LogEntry {
+    pub fn new(text: String) -> Self {
+        let level = LogLevel::from_str(&text);
+        Self { text, level }
+    }
+}
+
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum AppMode {
     Normal,
@@ -86,6 +99,8 @@ pub struct AppState {
     pub last_crash: Option<String>,
     pub last_crash_trace: Option<String>,
     pub is_capturing_crash: bool,
+    pub crash_history: Vec<String>,
+    pub show_crash_history: bool,
     pub build_task: Option<String>,
     pub build_history: VecDeque<Duration>,
     pub is_recording: bool,
@@ -123,6 +138,9 @@ pub struct AppState {
     // Variant selector
     pub variant_list: Vec<String>,
     pub variant_picker_idx: usize,
+    
+    // Rendering optimization
+    pub needs_redraw: bool,
 }
 
 impl Default for AppState {
@@ -143,6 +161,8 @@ impl Default for AppState {
             last_crash: None,
             last_crash_trace: None,
             is_capturing_crash: false,
+            crash_history: Vec::new(),
+            show_crash_history: false,
             build_task: None,
             build_history: VecDeque::with_capacity(5),
             is_recording: false,
@@ -169,6 +189,7 @@ impl Default for AppState {
             project_picker_idx: 0,
             variant_list: Vec::new(),
             variant_picker_idx: 0,
+            needs_redraw: true,
         }
     }
 }
