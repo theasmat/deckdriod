@@ -92,7 +92,7 @@ pub async fn build_and_launch(
         return Ok(());
     }
 
-    let mut args: Vec<&str> = vec![":androidApp:installDebug", "--parallel"];
+    let mut args: Vec<&str> = vec![":androidApp:installDebug", "--parallel", "--console=plain"];
     if force_rebuild {
         args.insert(0, "clean");
         args.push("--no-build-cache");
@@ -101,6 +101,7 @@ pub async fn build_and_launch(
     let mut child = match Command::new("./gradlew")
         .args(&args)
         .current_dir(project_path)
+        .env("TERM", "dumb")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

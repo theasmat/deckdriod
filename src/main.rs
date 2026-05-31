@@ -648,14 +648,15 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
     f.render_widget(Clear, area);
     if area.height < 5 || area.width < 10 { f.render_widget(Paragraph::new("Terminal too small").alignment(Alignment::Center), area); return; }
     let has_input = matches!(app.state.mode, AppMode::Search | AppMode::Input | AppMode::DeepLink);
-    // header(3 with border) + tabs(3) + [input(3)] + main(min) + footer(2 with border)
+    // header(1) + tabs(1) + separator(1) + [input(3)] + main(min) + footer(1)
     let mut main_constraints = vec![
-        Constraint::Length(3),  // header
-        Constraint::Length(3),  // tabs
+        Constraint::Length(1),  // header
+        Constraint::Length(1),  // tabs
+        Constraint::Length(1),  // separator line
         Constraint::Min(0),     // main content
-        Constraint::Length(2),  // footer
+        Constraint::Length(1),  // footer
     ];
-    if has_input { main_constraints.insert(2, Constraint::Length(3)); }
+    if has_input { main_constraints.insert(3, Constraint::Length(3)); }
     let chunks = Layout::default().direction(Direction::Vertical).constraints(main_constraints).split(area);
     let mut current_idx = 0;
 
@@ -665,7 +666,6 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
             None => Span::styled(" BAT:--%", Style::default().fg(Color::DarkGray)),
         };
         let device_str = app.state.device_serial.as_deref().unwrap_or("no device");
-        // Truncate app_id to fit: reserve ~60 chars for left side
         let max_id = (area.width as usize).saturating_sub(70);
         let app_id = &app.config.app_id;
         let app_id_display = if app_id.len() > max_id && max_id > 3 {
@@ -689,11 +689,7 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
         if app.state.is_recording { spans.push(Span::styled(" [REC]", Style::default().bg(Color::Red).fg(Color::White).bold())); }
         spans.push(Span::styled(format!("  {}", app_id_display), Style::default().fg(Color::DarkGray)));
 
-        f.render_widget(
-            Paragraph::new(Line::from(spans))
-                .block(Block::default().borders(Borders::BOTTOM).border_style(Style::default().fg(Color::DarkGray))),
-            chunks[current_idx],
-        );
+        f.render_widget(Paragraph::new(Line::from(spans)), chunks[current_idx]);
         current_idx += 1;
     }
 
@@ -706,13 +702,22 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
         ];
         let selected = match app.state.current_tab { Tab::Dashboard => 0, Tab::App => 1, Tab::Build => 2, Tab::Errors => 3 };
         let tabs = Tabs::new(tab_titles)
-            .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::DarkGray)))
             .select(selected)
             .style(Style::default().fg(Color::DarkGray))
             .highlight_style(Style::default().fg(Color::Black).bg(Color::Cyan).bold());
         f.render_widget(tabs, chunks[current_idx]);
         current_idx += 1;
     }
+
+    // separator line
+    f.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            "─".repeat(area.width as usize),
+            Style::default().fg(Color::DarkGray),
+        ))),
+        chunks[current_idx],
+    );
+    current_idx += 1;
 
     if has_input {
         let title = match app.state.mode { AppMode::Search => " / Search ", AppMode::DeepLink => " Deep Link URL ", _ => " Input " };
@@ -934,20 +939,16 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
         Span::styled(format!(" [BUILD: {}] ", short), Style::default().fg(Color::Yellow).bold())
     } else { Span::raw("") };
     let footer_line = Line::from(vec![
-        Span::styled(" [1-4] Tabs", Style::default().fg(Color::DarkGray)),
-        Span::styled("  [/] Search", Style::default().fg(Color::DarkGray)),
-        Span::styled("  [G] Follow", Style::default().fg(Color::DarkGray)),
-        Span::styled("  [h] Help", Style::default().fg(Color::DarkGray)),
-        Span::styled("  [q] Quit", Style::default().fg(Color::DarkGray)),
-        Span::raw("   "),
+        Span::styled(" [1-4]", Style::default().fg(Color::DarkGray)),
+        Span::styled(" [/]Search", Style::default().fg(Color::DarkGray)),
+        Span::styled(" [G]Follow", Style::default().fg(Color::DarkGray)),
+        Span::styled(" [h]Help", Style::default().fg(Color::DarkGray)),
+        Span::styled(" [q]Quit", Style::default().fg(Color::DarkGray)),
+        Span::raw("  "),
         build_span,
         crash_span,
     ]);
-    f.render_widget(
-        Paragraph::new(footer_line)
-            .block(Block::default().borders(Borders::TOP).border_style(Style::default().fg(Color::DarkGray))),
-        chunks[chunks.len() - 1],
-    );
+    f.render_widget(Paragraph::new(footer_line), chunks[chunks.len() - 1]);
 
     if app.state.mode == AppMode::Help || app.state.mode == AppMode::Welcome {
         let area = centered_rect(70, 80, f.area());
