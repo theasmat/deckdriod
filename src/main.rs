@@ -271,21 +271,29 @@ async fn main() -> Result<()> {
 
         tokio::select! {
             _ = interval.tick() => {
-                if let Some(ref serial) = app.state.device_serial {
-                    if app.state.show_logs && !log_manager.check_status().await {
-                        let _ = log_manager.start(serial, &app.config.app_id, tx_log.clone()).await;
-                    }
-                } else {
-                    if let Ok(devs) = commands::get_devices().await {
-                        if !devs.is_empty() {
-                            let serial = devs[0].clone();
-                            app.state.device_serial = Some(serial.clone());
-                            let stats_serial = serial.clone();
-                            let stats_app_id = app.config.app_id.clone();
-                            tokio::spawn(stats::start_stats_polling(stats_serial, stats_app_id, tx_stats.clone()));
-                            if app.state.show_logs { let _ = log_manager.start(&serial, &app.config.app_id, tx_log.clone()).await; }
+                let connected = commands::get_devices().await.unwrap_or_default();
+                if let Some(ref serial) = app.state.device_serial.clone() {
+                    if !connected.contains(serial) {
+                        // Device unplugged — reset state cleanly
+                        log_manager.stop();
+                        app.state.device_serial = None;
+                        app.state.stats = state::SystemStats::default();
+                        let _ = tx_log.send("[info] device disconnected".to_string());
+                    } else {
+                        // Device still connected — restart logcat if it died
+                        if app.state.show_logs && !log_manager.check_status().await {
+                            let _ = log_manager.start(serial, &app.config.app_id, tx_log.clone()).await;
                         }
                     }
+                } else if !connected.is_empty() {
+                    // New device appeared
+                    let serial = connected[0].clone();
+                    app.state.device_serial = Some(serial.clone());
+                    let stats_serial = serial.clone();
+                    let stats_app_id = app.config.app_id.clone();
+                    tokio::spawn(stats::start_stats_polling(stats_serial, stats_app_id, tx_stats.clone()));
+                    if app.state.show_logs { let _ = log_manager.start(&serial, &app.config.app_id, tx_log.clone()).await; }
+                    let _ = tx_log.send(format!("[info] device connected: {}", serial));
                 }
             }
             Some(log) = rx_log.recv() => { app.add_log(log); }

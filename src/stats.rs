@@ -17,12 +17,18 @@ pub async fn start_stats_polling(
     tx: mpsc::UnboundedSender<StatsUpdate>
 ) {
     let mut interval = tokio::time::interval(Duration::from_secs(3));
+    let mut failures = 0u8;
     loop {
         interval.tick().await;
-        
-        let update = get_combined_stats(&serial, &app_id).await.unwrap_or(None);
-        if let Some(stats) = update {
-            let _ = tx.send(stats);
+        match get_combined_stats(&serial, &app_id).await {
+            Ok(Some(stats)) => {
+                failures = 0;
+                let _ = tx.send(stats);
+            }
+            _ => {
+                failures += 1;
+                if failures >= 3 { return; } // device gone, stop polling
+            }
         }
     }
 }
