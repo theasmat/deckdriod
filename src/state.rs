@@ -105,6 +105,7 @@ pub struct AppState {
     pub dir_picker_cwd: String,
     pub dir_picker_entries: Vec<String>,
     pub dir_picker_idx: usize,
+    pub dir_picker_target: u8, // 0=project_path, 1=output_path
 }
 
 impl Default for AppState {
@@ -143,6 +144,7 @@ impl Default for AppState {
             dir_picker_cwd: String::new(),
             dir_picker_entries: Vec::new(),
             dir_picker_idx: 0,
+            dir_picker_target: 0,
         }
     }
 }

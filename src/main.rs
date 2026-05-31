@@ -584,7 +584,7 @@ async fn main() -> Result<()> {
                                 }
                             }
                             AppMode::Input => {
-                                 if key.code == KeyCode::Esc { app.state.mode = AppMode::Normal; }
+                                 if key.code == KeyCode::Esc { app.state.mode = AppMode::Settings; }
                                  if key.code == KeyCode::Enter {
                                      let val = app.state.input_buffer.clone();
                                      match app.state.settings_index {
@@ -601,8 +601,20 @@ async fn main() -> Result<()> {
                                      let _ = app.config.save();
                                      app.state.mode = AppMode::Settings;
                                  }
-                                 if let KeyCode::Char(c) = key.code { app.state.input_buffer.push(c); }
-                                 if key.code == KeyCode::Backspace { app.state.input_buffer.pop(); }
+                                 // [b] opens dir browser for path fields
+                                 if key.code == KeyCode::Char('b') && (app.state.settings_index == 5 || app.state.settings_index == 6) {
+                                     let start = if app.state.input_buffer.is_empty() || app.state.input_buffer == "." {
+                                         dirs::home_dir().map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|| "/".to_string())
+                                     } else { app.state.input_buffer.clone() };
+                                     app.state.dir_picker_cwd = start.clone();
+                                     app.state.dir_picker_entries = load_dir_entries(&start);
+                                     app.state.dir_picker_idx = 0;
+                                     app.state.dir_picker_target = app.state.settings_index as u8; // 5=project, 6=output
+                                     app.state.mode = AppMode::DirPicker;
+                                 } else {
+                                     if let KeyCode::Char(c) = key.code { app.state.input_buffer.push(c); }
+                                     if key.code == KeyCode::Backspace { app.state.input_buffer.pop(); }
+                                 }
                             }
                             AppMode::Help | AppMode::Welcome => { if key.code == KeyCode::Esc || key.code == KeyCode::Char('h') || key.code == KeyCode::Char('q') || key.code == KeyCode::Enter { if app.state.mode == AppMode::Welcome { let _ = app.config.save(); } app.state.mode = AppMode::Normal; } }
                             AppMode::Settings => {
@@ -664,6 +676,7 @@ async fn main() -> Result<()> {
                                         app.state.dir_picker_cwd = start.clone();
                                         app.state.dir_picker_entries = load_dir_entries(&start);
                                         app.state.dir_picker_idx = 0;
+                                        app.state.dir_picker_target = 0; // project path
                                         app.state.mode = AppMode::DirPicker;
                                     }
                                     KeyCode::Esc => { app.state.mode = AppMode::Normal; }
@@ -674,7 +687,11 @@ async fn main() -> Result<()> {
                             }
                             AppMode::DirPicker => {
                                 match key.code {
-                                    KeyCode::Esc => { app.state.mode = AppMode::PickProject; }
+                                    KeyCode::Esc => {
+                                        app.state.mode = if app.state.dir_picker_target == 0 && app.state.settings_index == 0 {
+                                            AppMode::PickProject
+                                        } else { AppMode::Input };
+                                    }
                                     KeyCode::Up | KeyCode::Char('k') => {
                                         app.state.dir_picker_idx = app.state.dir_picker_idx.saturating_sub(1);
                                     }
@@ -692,18 +709,33 @@ async fn main() -> Result<()> {
                                             } else {
                                                 format!("{}/{}", app.state.dir_picker_cwd.trim_end_matches('/'), entry)
                                             };
-                                            // Check if this dir has gradlew
-                                            if std::path::Path::new(&new_path).join("gradlew").exists() {
-                                                app.config.project_path = new_path.clone();
-                                                let _ = app.config.save();
-                                                app.state.input_buffer = new_path.clone();
-                                                app.state.mode = AppMode::Normal;
-                                                let _ = tx_log.send(format!("[ok] project path set: {}", app.config.project_path));
+                                            let target = app.state.dir_picker_target;
+                                            if target == 6 {
+                                                // Output path — any directory is valid, select on Enter
+                                                if entry != ".." {
+                                                    app.config.output_path = new_path.clone();
+                                                    let _ = app.config.save();
+                                                    app.state.input_buffer = new_path.clone();
+                                                    app.state.mode = AppMode::Settings;
+                                                    let _ = tx_log.send(format!("[ok] output path set: {}", app.config.output_path));
+                                                } else {
+                                                    app.state.dir_picker_cwd = new_path.clone();
+                                                    app.state.dir_picker_entries = load_dir_entries(&new_path);
+                                                    app.state.dir_picker_idx = 0;
+                                                }
                                             } else {
-                                                // Navigate into it
-                                                app.state.dir_picker_cwd = new_path.clone();
-                                                app.state.dir_picker_entries = load_dir_entries(&new_path);
-                                                app.state.dir_picker_idx = 0;
+                                                // Project path — must contain gradlew
+                                                if std::path::Path::new(&new_path).join("gradlew").exists() {
+                                                    app.config.project_path = new_path.clone();
+                                                    let _ = app.config.save();
+                                                    app.state.input_buffer = new_path.clone();
+                                                    app.state.mode = AppMode::Normal;
+                                                    let _ = tx_log.send(format!("[ok] project path set: {}", app.config.project_path));
+                                                } else {
+                                                    app.state.dir_picker_cwd = new_path.clone();
+                                                    app.state.dir_picker_entries = load_dir_entries(&new_path);
+                                                    app.state.dir_picker_idx = 0;
+                                                }
                                             }
                                         }
                                     }
@@ -1085,7 +1117,18 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
         let gap_str = format!("{:.1}", app.config.rebuild_gap);
         let mcp_port_str = app.state.mcp_port.to_string();
         let settings = vec![("App ID", &app.config.app_id), ("Main Activity", &app.config.activity), ("Watch Latency", &latency_str), ("Build Gap", &gap_str), ("Log Tag", &app.config.log_tag), ("Project Path", &app.config.project_path), ("Output Path", &app.config.output_path), ("MCP Port", &mcp_port_str)];
-        let items: Vec<ListItem> = settings.iter().enumerate().map(|(i, (label, val))| { let mut style = Style::default(); if i == app.state.settings_index { style = style.fg(Color::Yellow).bold(); } ListItem::new(Line::from(vec![Span::styled(format!("{:<20}: ", label), style), Span::raw(*val)])) }).collect();
+        let items: Vec<ListItem> = settings.iter().enumerate().map(|(i, (label, val))| {
+            let selected = i == app.state.settings_index;
+            let style = if selected { Style::default().fg(Color::Yellow).bold() } else { Style::default() };
+            let browse_hint = if selected && (i == 5 || i == 6) {
+                Span::styled("  [b]=browse", Style::default().fg(Color::Cyan))
+            } else { Span::raw("") };
+            ListItem::new(Line::from(vec![
+                Span::styled(format!("{:<20}: ", label), style),
+                Span::raw(val.as_str()),
+                browse_hint,
+            ]))
+        }).collect();
         f.render_widget(List::new(items).block(Block::default().borders(Borders::ALL).title(" Project Settings ").border_style(Style::default().fg(Color::Yellow))), area);
         if app.state.mode == AppMode::Input { let input_area = centered_rect(50, 10, area); f.render_widget(Clear, input_area); f.render_widget(Paragraph::new(app.state.input_buffer.as_str()).block(Block::default().borders(Borders::ALL).title(" Edit ").border_style(Style::default().fg(Color::Yellow))), input_area); }
     }
@@ -1177,7 +1220,10 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
         f.render_widget(
             Paragraph::new(Line::from(vec![
                 Span::styled(" [↑↓/jk] Navigate  [Enter] Select/Descend  [Esc] Back", Style::default().fg(Color::DarkGray)),
-                Span::styled("  [A]=Android project", Style::default().fg(Color::Green)),
+                Span::styled(
+                    if app.state.dir_picker_target == 6 { "  Enter=pick this folder" } else { "  [A]=Android project" },
+                    Style::default().fg(Color::Green)
+                ),
                 Span::styled(format!("  {}/{}", idx + 1, total), Style::default().fg(Color::DarkGray)),
             ])).block(Block::default().borders(Borders::BOTTOM | Borders::LEFT | Borders::RIGHT).border_style(Style::default().fg(Color::Cyan))),
             chunks[2],
