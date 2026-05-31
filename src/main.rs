@@ -735,7 +735,8 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
                 .split(dash_chunks[0]);
 
             let cpu_title = if let Some(ref t) = app.state.build_task {
-                let max = (stats_layout[0].width as usize).saturating_sub(6);
+                // width - 2 borders - " BUILD:  " (9 chars)
+                let max = (stats_layout[0].width as usize).saturating_sub(11);
                 let t = if t.len() > max { format!("{}...", &t[..max.saturating_sub(3)]) } else { t.clone() };
                 format!(" BUILD: {} ", t)
             } else {
@@ -758,27 +759,65 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
                 stats_layout[1],
             );
 
-            // ── Build history ──────────────────────────────────────────
-            let history_block = Block::default().borders(Borders::ALL).title(" Build History ").border_style(Style::default().fg(Color::DarkGray));
+            // ── Build history + live status ────────────────────────────
+            let history_block = Block::default().borders(Borders::ALL).title(" Build Status ").border_style(Style::default().fg(Color::DarkGray));
             let inner_hist = history_block.inner(dash_chunks[1]);
             f.render_widget(history_block, dash_chunks[1]);
-            if app.state.build_history.is_empty() {
-                f.render_widget(Paragraph::new("  No builds yet. Press [a] to build.").style(Style::default().fg(Color::DarkGray)), inner_hist);
+
+            let mut hist_lines: Vec<Line> = Vec::new();
+            // Live build task
+            if let Some(ref t) = app.state.build_task {
+                hist_lines.push(Line::from(vec![
+                    Span::styled(" BUILDING  ", Style::default().bg(Color::Yellow).fg(Color::Black).bold()),
+                    Span::styled(format!(" {}", t), Style::default().fg(Color::Yellow)),
+                ]));
+            } else if !app.state.build_history.is_empty() {
+                let last = app.state.build_history.back().unwrap().as_secs_f64();
+                let color = if last < 30.0 { Color::Green } else if last < 90.0 { Color::Yellow } else { Color::Red };
+                hist_lines.push(Line::from(vec![
+                    Span::styled(" LAST BUILD ", Style::default().bg(color).fg(Color::Black).bold()),
+                    Span::styled(format!("  {:.1}s", last), Style::default().fg(color)),
+                ]));
             } else {
-                let hist_spans: Vec<Span> = app.state.build_history.iter().enumerate().map(|(i, d)| {
+                hist_lines.push(Line::from(Span::styled("  No builds yet — press [a] to build", Style::default().fg(Color::DarkGray))));
+            }
+            // History row
+            if !app.state.build_history.is_empty() {
+                let spans: Vec<Span> = app.state.build_history.iter().enumerate().map(|(i, d)| {
                     let secs = d.as_secs_f64();
                     let color = if secs < 30.0 { Color::Green } else if secs < 90.0 { Color::Yellow } else { Color::Red };
                     Span::styled(format!("  #{} {:.1}s", i + 1, secs), Style::default().fg(color))
                 }).collect();
-                f.render_widget(Paragraph::new(Line::from(hist_spans)), inner_hist);
+                hist_lines.push(Line::from(spans));
             }
+            f.render_widget(Paragraph::new(hist_lines), inner_hist);
 
-            // ── Commands grid ──────────────────────────────────────────
-            let cmd_block = Block::default().borders(Borders::ALL).title(" Quick Commands ").border_style(Style::default().fg(Color::DarkGray));
+            // ── Commands grid (or live build log when building) ────────
+            let cmd_block = Block::default().borders(Borders::ALL)
+                .title(if app.state.build_task.is_some() { " Build Output (press [3] for full log) " } else { " Quick Commands " })
+                .border_style(Style::default().fg(if app.state.build_task.is_some() { Color::Yellow } else { Color::DarkGray }));
             let inner_cmd = cmd_block.inner(dash_chunks[2]);
             f.render_widget(cmd_block, dash_chunks[2]);
 
-            // Responsive: wide = 3 cols, narrow = 2 cols
+            if app.state.build_task.is_some() {
+                // Show tail of build log lines
+                let height = inner_cmd.height as usize;
+                let build_lines: Vec<Line> = app.cache_build.iter().rev().take(height).rev().map(|l| {
+                    let style = if l.contains("[build-err]") || l.contains("error:") || l.contains("FAILED") {
+                        Style::default().fg(Color::Red)
+                    } else if l.contains("> Task") {
+                        Style::default().fg(Color::Cyan).bold()
+                    } else if l.contains("[ok]") {
+                        Style::default().fg(Color::Green)
+                    } else {
+                        Style::default().fg(Color::White)
+                    };
+                    // Strip [build] prefix for cleaner display
+                    let text = l.trim_start_matches("[build] ");
+                    Line::from(Span::styled(text.to_string(), style))
+                }).collect();
+                f.render_widget(Paragraph::new(build_lines).wrap(Wrap { trim: false }), inner_cmd);
+            } else {
             let use_3_cols = area.width >= 80;
             let cmd_layout = if use_3_cols {
                 Layout::default().direction(Direction::Horizontal)
@@ -805,11 +844,11 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
                 f.render_widget(Paragraph::new(col2), cmd_layout[1]);
                 f.render_widget(Paragraph::new(col3), cmd_layout[2]);
             } else {
-                // Merge col2+col3 into second column
                 let mut merged = col2;
                 merged.extend(col3);
                 f.render_widget(Paragraph::new(merged), cmd_layout[1]);
             }
+            } // end else (not building)
         }
         _ => {
             let logs = match app.state.current_tab {
