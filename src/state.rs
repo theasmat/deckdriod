@@ -16,6 +16,7 @@ pub enum AppMode {
     NoHardwareHelp,
     PickProject,
     DirPicker,
+    DevicePicker,
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -75,6 +76,7 @@ pub struct AppState {
     pub current_tab: Tab,
     pub input_buffer: String,
     pub search_query: String,
+    pub search_match_idx: usize,
     pub autoscroll: bool,
     pub min_log_level: LogLevel,
     pub stats: SystemStats,
@@ -106,6 +108,10 @@ pub struct AppState {
     pub dir_picker_entries: Vec<String>,
     pub dir_picker_idx: usize,
     pub dir_picker_target: u8, // 0=project_path, 1=output_path
+    
+    // Device switcher
+    pub available_devices: Vec<(String, String)>, // (serial, model)
+    pub device_picker_idx: usize,
 }
 
 impl Default for AppState {
@@ -119,6 +125,7 @@ impl Default for AppState {
             current_tab: Tab::Dashboard,
             input_buffer: String::new(),
             search_query: String::new(),
+            search_match_idx: 0,
             autoscroll: true,
             min_log_level: LogLevel::Verbose,
             stats: SystemStats::default(),
@@ -145,6 +152,8 @@ impl Default for AppState {
             dir_picker_entries: Vec::new(),
             dir_picker_idx: 0,
             dir_picker_target: 0,
+            available_devices: Vec::new(),
+            device_picker_idx: 0,
         }
     }
 }

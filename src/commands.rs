@@ -16,7 +16,7 @@ pub enum BuildEvent {
     Failed,
 }
 
-pub async fn get_devices() -> Result<Vec<String>> {
+pub async fn get_device_serials() -> Result<Vec<String>> {
     let output = Command::new("adb")
         .arg("devices")
         .stdin(Stdio::null())
@@ -53,6 +53,32 @@ pub async fn get_avds() -> Result<Vec<String>> {
         .collect();
     
     Ok(avds)
+}
+
+pub async fn get_devices() -> Vec<(String, String)> {
+    let output = Command::new("adb").args(["devices", "-l"]).stdin(Stdio::null()).output().await;
+    if let Ok(out) = output {
+        let list = String::from_utf8_lossy(&out.stdout);
+        list.lines()
+            .skip(1)
+            .filter_map(|line| {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() >= 2 && parts[1] == "device" {
+                    let serial = parts[0].to_string();
+                    let model = parts.iter()
+                        .find(|p| p.starts_with("model:"))
+                        .and_then(|p| p.strip_prefix("model:"))
+                        .unwrap_or("Unknown")
+                        .to_string();
+                    Some((serial, model))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    } else {
+        Vec::new()
+    }
 }
 
 pub async fn launch_emulator(avd_name: &str) -> Result<()> {

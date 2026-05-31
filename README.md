@@ -85,10 +85,11 @@ Simply run `deckdriod` in the root of your project, or configure a `PROJECT_PATH
 
 | Key | Action |
 | :--- | :--- |
-| `a` / `r` / `Enter` | **Build & Launch**: Rebuilds and restarts the app. |
+| `r` / `Enter` | **Build & Launch**: Rebuilds and restarts the app. |
 | `f` | **Force Rebuild**: Clean + Build without cache. |
-| `L` | **Launch Only**: Restarts the app without rebuilding. |
-| `B` (Shift+b) | **Broadcast Toggle**: Run commands on **ALL** connected devices. |
+| `l` | **Launch Only**: Restarts the app without rebuilding. |
+| `d` | **Device Switcher**: Select from connected devices. |
+| `k` | **Kill App**: Force stop the app. |
 | `E` | **Emulator Selector**: Select and launch an Android emulator. |
 | `M` (Shift+m) | **MCP Toggle**: Enable/Disable AI log analysis server. |
 | `e` | **Export Logs**: Save current log buffer to `deckdriod_export.txt`. |

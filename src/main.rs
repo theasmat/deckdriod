@@ -174,8 +174,17 @@ impl App {
         }
     }
 
+    fn get_current_cache(&self) -> &Vec<String> {
+        match self.state.current_tab {
+            Tab::Dashboard => &self.cache_all,
+            Tab::App => &self.cache_app,
+            Tab::Build => &self.cache_build,
+            Tab::Errors => &self.cache_err,
+        }
+    }
+
     async fn get_target_serials(&self) -> Vec<String> {
-        if self.state.is_broadcast { commands::get_devices().await.unwrap_or_default() } 
+        if self.state.is_broadcast { commands::get_device_serials().await.unwrap_or_default() } 
         else { self.state.device_serial.as_ref().map(|s| vec![s.clone()]).unwrap_or_default() }
     }
 }
@@ -222,7 +231,7 @@ async fn main() -> Result<()> {
         state.input_buffer = config.project_path.clone();
     }
 
-    let devices = commands::get_devices().await.unwrap_or_default();
+    let devices = commands::get_device_serials().await.unwrap_or_default();
     if devices.is_empty() {
         let avds = commands::get_avds().await.unwrap_or_default();
         if avds.is_empty() { state.mode = AppMode::NoHardwareHelp; } 
@@ -282,9 +291,9 @@ async fn main() -> Result<()> {
 
         tokio::select! {
             _ = interval.tick() => {
-                let connected = commands::get_devices().await.unwrap_or_default();
+                let connected = commands::get_devices().await;
                 if let Some(ref serial) = app.state.device_serial.clone() {
-                    if !connected.contains(serial) {
+                    if !connected.iter().any(|(s, _)| s == serial) {
                         // Device unplugged — reset state cleanly
                         log_manager.stop();
                         app.state.device_serial = None;
@@ -298,7 +307,7 @@ async fn main() -> Result<()> {
                     }
                 } else if !connected.is_empty() {
                     // New device appeared
-                    let serial = connected[0].clone();
+                    let (serial, _) = connected[0].clone();
                     app.state.device_serial = Some(serial.clone());
                     let stats_serial = serial.clone();
                     let stats_app_id = app.config.app_id.clone();
@@ -424,6 +433,13 @@ async fn main() -> Result<()> {
                                         if let Some(ref serial) = app.state.device_serial { let _ = log_manager.start(serial, &app.config.app_id, tx_log.clone()).await; }
                                     }
                                     (KeyCode::Char('h'), _) => { app.state.mode = AppMode::Help; }
+                                    (KeyCode::Char('?'), _) => { app.state.mode = AppMode::Help; }
+                                    (KeyCode::Char('l'), KeyModifiers::CONTROL) => {
+                                        app.logs.clear(); app.cache_all.clear(); app.cache_app.clear(); app.cache_build.clear(); app.cache_err.clear();
+                                        app.state.last_crash = None; app.state.search_query.clear();
+                                        app.state.log_scroll = 0;
+                                        if let Some(ref serial) = app.state.device_serial { let _ = log_manager.start(serial, &app.config.app_id, tx_log.clone()).await; }
+                                    }
                                     (KeyCode::Char('i'), _) => { app.state.mode = AppMode::Settings; app.state.settings_index = 0; }
                                     (KeyCode::Char('w'), _) => { app.state.auto_rebuild = !app.state.auto_rebuild; }
                                     (KeyCode::Char('o'), _) => { app.state.auto_open = !app.state.auto_open; }
@@ -459,6 +475,27 @@ async fn main() -> Result<()> {
                                             let _ = tx.send(()).await;
                                             let _ = tx_log.send("[info] MCP server stopped".to_string());
                                         }
+                                    }
+                                    (KeyCode::Char('d'), _) => {
+                                        let devices = commands::get_devices().await;
+                                        if !devices.is_empty() { 
+                                            app.state.available_devices = devices; 
+                                            app.state.mode = AppMode::DevicePicker; 
+                                            app.state.device_picker_idx = 0; 
+                                        } else { 
+                                            let _ = tx_log.send("[err] no devices found".to_string()); 
+                                        }
+                                    }
+                                    (KeyCode::Char('k'), _) => {
+                                        let log_tx = tx_log.clone();
+                                        let cfg = app.config.clone();
+                                        let serials = app.get_target_serials().await;
+                                        tokio::spawn(async move {
+                                            for s in serials {
+                                                let _ = tokio::process::Command::new("adb").args(["-s", &s, "shell", "am", "force-stop", &cfg.app_id]).status().await;
+                                            }
+                                            let _ = log_tx.send("[ok] app killed".to_string());
+                                        });
                                     }
                                     (KeyCode::Char('E'), _) => {
                                         if let Ok(avds) = commands::get_avds().await {
@@ -509,15 +546,33 @@ async fn main() -> Result<()> {
                                         let _ = std::fs::write("deckdriod_export.txt", content);
                                         let _ = tx_log.send("[ok] logs exported to deckdriod_export.txt".to_string());
                                     }
-                                    (KeyCode::Char('d'), _) => {
-                                        let serials = app.get_target_serials().await;
-                                        tokio::spawn(async move { for s in serials { let _ = tokio::process::Command::new("adb").args(["-s", &s, "shell", "input", "keyevent", "82"]).status().await; } });
-                                    }
                                     (KeyCode::Char('/'), _) => { app.state.mode = AppMode::Search; app.state.input_buffer.clear(); }
+                                    (KeyCode::Char('n'), _) => {
+                                        if !app.state.search_query.is_empty() {
+                                            let cache = app.get_current_cache();
+                                            let matches: Vec<usize> = cache.iter().enumerate().filter(|(_, line)| line.to_lowercase().contains(&app.state.search_query.to_lowercase())).map(|(i, _)| i).collect();
+                                            if !matches.is_empty() {
+                                                app.state.search_match_idx = (app.state.search_match_idx + 1) % matches.len();
+                                                app.state.log_scroll = matches[app.state.search_match_idx];
+                                                app.state.autoscroll = false;
+                                            }
+                                        }
+                                    }
+                                    (KeyCode::Char('N'), _) => {
+                                        if !app.state.search_query.is_empty() {
+                                            let cache = app.get_current_cache();
+                                            let matches: Vec<usize> = cache.iter().enumerate().filter(|(_, line)| line.to_lowercase().contains(&app.state.search_query.to_lowercase())).map(|(i, _)| i).collect();
+                                            if !matches.is_empty() {
+                                                app.state.search_match_idx = if app.state.search_match_idx == 0 { matches.len() - 1 } else { app.state.search_match_idx - 1 };
+                                                app.state.log_scroll = matches[app.state.search_match_idx];
+                                                app.state.autoscroll = false;
+                                            }
+                                        }
+                                    }
                                     (KeyCode::Up, _) | (KeyCode::Char('k'), _) => { app.state.autoscroll = false; app.state.log_scroll = app.state.log_scroll.saturating_sub(1); }
                                     (KeyCode::Down, _) | (KeyCode::Char('j'), _) => { app.state.autoscroll = false; app.state.log_scroll = app.state.log_scroll.saturating_add(1); }
-                                    (KeyCode::PageUp, _) => { app.state.autoscroll = false; app.state.log_scroll = app.state.log_scroll.saturating_sub(20); }
-                                    (KeyCode::PageDown, _) => { app.state.autoscroll = false; app.state.log_scroll = app.state.log_scroll.saturating_add(20); }
+                                    (KeyCode::PageUp, _) | (KeyCode::Char('u'), KeyModifiers::CONTROL) => { app.state.autoscroll = false; app.state.log_scroll = app.state.log_scroll.saturating_sub(20); }
+                                    (KeyCode::PageDown, _) | (KeyCode::Char('d'), KeyModifiers::CONTROL) => { app.state.autoscroll = false; app.state.log_scroll = app.state.log_scroll.saturating_add(20); }
                                     (KeyCode::Char('g'), _) => { app.state.autoscroll = false; app.state.log_scroll = 0; }
                                     (KeyCode::Char('G'), _) => { app.state.autoscroll = true; }
                                     (KeyCode::Char('y'), _) => {
@@ -563,7 +618,7 @@ async fn main() -> Result<()> {
                             }
                             AppMode::Search => {
                                 match key.code {
-                                    KeyCode::Enter => { app.state.search_query = app.state.input_buffer.clone(); app.refresh_filter_cache(); app.state.mode = AppMode::Normal; }
+                                    KeyCode::Enter => { app.state.search_query = app.state.input_buffer.clone(); app.state.search_match_idx = 0; app.refresh_filter_cache(); app.state.mode = AppMode::Normal; }
                                     KeyCode::Esc => { app.state.mode = AppMode::Normal; }
                                     KeyCode::Char(c) => { app.state.input_buffer.push(c); }
                                     KeyCode::Backspace => { app.state.input_buffer.pop(); }
@@ -649,6 +704,29 @@ async fn main() -> Result<()> {
                                         let avd = app.state.available_avds[app.state.settings_index].clone();
                                         let log_tx = tx_log.clone();
                                         tokio::spawn(async move { let _ = log_tx.send(format!("[info] launching emulator: {}...", avd)); let _ = commands::launch_emulator(&avd).await; });
+                                        app.state.mode = AppMode::Normal;
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            AppMode::DevicePicker => {
+                                match key.code {
+                                    KeyCode::Esc | KeyCode::Char('q') => { app.state.mode = AppMode::Normal; }
+                                    KeyCode::Up | KeyCode::Char('k') => app.state.device_picker_idx = app.state.device_picker_idx.saturating_sub(1),
+                                    KeyCode::Down | KeyCode::Char('j') => app.state.device_picker_idx = (app.state.device_picker_idx + 1).min(app.state.available_devices.len().saturating_sub(1)),
+                                    KeyCode::Enter => {
+                                        let (serial, _) = app.state.available_devices[app.state.device_picker_idx].clone();
+                                        app.state.device_serial = Some(serial.clone());
+                                        app.state.is_broadcast = false;
+                                        let _ = tx_log.send(format!("[ok] switched to device: {}", serial));
+                                        if let Some(ref s) = app.state.device_serial { let _ = log_manager.start(s, &app.config.app_id, tx_log.clone()).await; }
+                                        app.state.mode = AppMode::Normal;
+                                    }
+                                    KeyCode::Char('b') => {
+                                        app.state.is_broadcast = !app.state.is_broadcast;
+                                        app.state.device_serial = None;
+                                        let msg = if app.state.is_broadcast { "[ok] broadcast mode ON" } else { "[ok] broadcast mode OFF" };
+                                        let _ = tx_log.send(msg.to_string());
                                         app.state.mode = AppMode::Normal;
                                     }
                                     _ => {}
@@ -1140,6 +1218,19 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
         f.render_widget(Clear, area);
         let items: Vec<ListItem> = app.state.available_avds.iter().enumerate().map(|(i, name)| { let mut style = Style::default(); if i == app.state.settings_index { style = style.fg(Color::Yellow).bold(); } ListItem::new(Line::from(vec![Span::styled(format!("> {}", name), style)])) }).collect();
         f.render_widget(List::new(items).block(Block::default().borders(Borders::ALL).title(" Select Emulator ").border_style(Style::default().fg(Color::Yellow))), area);
+    }
+
+    if app.state.mode == AppMode::DevicePicker {
+        let area = centered_rect(60, 50, f.area());
+        f.render_widget(Clear, area);
+        let mut items: Vec<ListItem> = app.state.available_devices.iter().enumerate().map(|(i, (serial, model))| { 
+            let mut style = Style::default(); 
+            if i == app.state.device_picker_idx { style = style.fg(Color::Yellow).bold(); } 
+            ListItem::new(Line::from(vec![Span::styled(format!("> {} ({})", model, serial), style)])) 
+        }).collect();
+        items.push(ListItem::new(Line::from(vec![Span::styled("", Style::default())])));
+        items.push(ListItem::new(Line::from(vec![Span::styled("[b] Broadcast to ALL devices", if app.state.is_broadcast { Style::default().fg(Color::Green).bold() } else { Style::default().fg(Color::DarkGray) })])));
+        f.render_widget(List::new(items).block(Block::default().borders(Borders::ALL).title(" Select Device ").border_style(Style::default().fg(Color::Yellow))), area);
     }
 
     if app.state.mode == AppMode::NoHardwareHelp {
