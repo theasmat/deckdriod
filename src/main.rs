@@ -228,6 +228,14 @@ async fn main() -> Result<()> {
                 println!("✅ Generated DECKDRIOD_MCP.md");
                 return Ok(());
             }
+            "mcp-install" => {
+                let port = config::Config::load().mcp_port;
+                if let Err(e) = mcp::install_mcp_config(port) {
+                    eprintln!("❌ Failed to install MCP config: {}", e);
+                    std::process::exit(1);
+                }
+                return Ok(());
+            }
             _ => {}
         }
     }
@@ -273,6 +281,17 @@ async fn main() -> Result<()> {
     let (tx_build, mut rx_build) = mpsc::unbounded_channel();
     
     let mut app = App::new(config, state);
+    
+    // Restore last tab from config
+    if let Some(ref tab) = app.config.last_tab {
+        app.state.current_tab = match tab.as_str() {
+            "App" => Tab::App,
+            "Build" => Tab::Build,
+            "Errors" => Tab::Errors,
+            _ => Tab::Dashboard,
+        };
+    }
+    
     app.refresh_filter_cache();
 
     let _watcher = watcher::start_watcher(app.config.watch_latency, tx_watch)?;
@@ -327,6 +346,8 @@ async fn main() -> Result<()> {
                     // New device appeared
                     let (serial, _) = connected[0].clone();
                     app.state.device_serial = Some(serial.clone());
+                    app.config.last_device = Some(serial.clone());
+                    let _ = app.config.save();
                     let stats_serial = serial.clone();
                     let stats_app_id = app.config.app_id.clone();
                     tokio::spawn(stats::start_stats_polling(stats_serial, stats_app_id, tx_stats.clone()));
@@ -689,7 +710,12 @@ async fn main() -> Result<()> {
                                         let current_cache = match app.state.current_tab { Tab::Dashboard => &app.cache_all, Tab::App => &app.cache_app, Tab::Build => &app.cache_build, Tab::Errors => &app.cache_err };
                                         if !current_cache.is_empty() { let content = current_cache.join("\n"); if let Ok(mut clipboard) = arboard::Clipboard::new() { let _ = clipboard.set_text(content); let _ = tx_log.send("[ok] all logs yanked".to_string()); } }
                                     }
-                                    (KeyCode::Tab, _) => { app.state.current_tab = match app.state.current_tab { Tab::Dashboard => Tab::App, Tab::App => Tab::Build, Tab::Build => Tab::Errors, Tab::Errors => Tab::Dashboard }; app.refresh_filter_cache(); }
+                                    (KeyCode::Tab, _) => { 
+                                        app.state.current_tab = match app.state.current_tab { Tab::Dashboard => Tab::App, Tab::App => Tab::Build, Tab::Build => Tab::Errors, Tab::Errors => Tab::Dashboard };
+                                        app.config.last_tab = Some(format!("{:?}", app.state.current_tab));
+                                        let _ = app.config.save();
+                                        app.refresh_filter_cache();
+                                    }
                                     (KeyCode::Char('1'), m) if !m.contains(KeyModifiers::ALT) => { app.state.current_tab = Tab::Dashboard; app.refresh_filter_cache(); }
                                     (KeyCode::Char('2'), m) if !m.contains(KeyModifiers::ALT) => { app.state.current_tab = Tab::App; app.refresh_filter_cache(); }
                                     (KeyCode::Char('3'), m) if !m.contains(KeyModifiers::ALT) => { app.state.current_tab = Tab::Build; app.refresh_filter_cache(); }
@@ -1348,6 +1374,7 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
             Line::from(vec![Span::styled(" deckdriod usage   ", Style::default().fg(Color::Cyan)), Span::raw(": Print detailed manual")]),
             Line::from(vec![Span::styled(" deckdriod update  ", Style::default().fg(Color::Cyan)), Span::raw(": Update to latest version")]),
             Line::from(vec![Span::styled(" deckdriod mcp-doc ", Style::default().fg(Color::Cyan)), Span::raw(": Generate DECKDRIOD_MCP.md for AI")]),
+            Line::from(vec![Span::styled(" deckdriod mcp-install ", Style::default().fg(Color::Cyan)), Span::raw(": Install MCP into IDEs (Cursor/VS Code/Kiro/Antigravity)")]),
             Line::from(vec![Span::raw("")]),
             Line::from(vec![Span::styled("--- Controls ---", Style::default().bold())]),
             Line::from(vec![Span::styled(" a / r / Ent ", Style::default().fg(Color::Cyan)), Span::raw(": Build & Launch")]),

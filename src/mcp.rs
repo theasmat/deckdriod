@@ -326,3 +326,72 @@ REBUILD_GAP=2.0
 ```
 "#, env!("CARGO_PKG_VERSION"), port, port)
 }
+
+pub fn install_mcp_config(port: u16) -> anyhow::Result<()> {
+    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Could not find home directory"))?;
+
+    let paths = vec![
+        // Claude Desktop
+        home.join("Library/Application Support/Claude/claude_desktop_config.json"),
+        // VS Code (Cline / Roo Code) Mac
+        home.join("Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json"),
+        home.join("Library/Application Support/Code/User/globalStorage/rooveterinaryinc.roo-cline/settings/cline_mcp_settings.json"),
+        // Cursor Mac
+        home.join("Library/Application Support/Cursor/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json"),
+        // VS Code (Cline / Roo Code) Linux
+        home.join(".config/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json"),
+        home.join(".config/Code/User/globalStorage/rooveterinaryinc.roo-cline/settings/cline_mcp_settings.json"),
+        // Cursor Linux
+        home.join(".config/Cursor/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json"),
+        // Antigravity IDE
+        home.join(".gemini/antigravity-ide/mcp_config.json"),
+        // Kiro
+        home.join(".kiro/mcp.json"),
+    ];
+
+    let deckdriod_config = json!({
+        "command": "curl",
+        "args": ["-s", format!("http://localhost:{}/sse", port)]
+    });
+
+    let mut installed_count = 0;
+
+    for path in paths {
+        if let Some(parent) = path.parent() {
+            // Only create config if the parent extension dir exists (to avoid creating folders for IDEs the user doesn't have)
+            if parent.exists() {
+                let mut data: serde_json::Value = if path.exists() {
+                    let content = std::fs::read_to_string(&path).unwrap_or_else(|_| "{}".to_string());
+                    serde_json::from_str(&content).unwrap_or_else(|_| json!({}))
+                } else {
+                    json!({})
+                };
+
+                if !data.is_object() {
+                    data = json!({});
+                }
+
+                if data.get("mcpServers").is_none() {
+                    data["mcpServers"] = json!({});
+                }
+
+                if let Some(servers) = data.get_mut("mcpServers").and_then(|v| v.as_object_mut()) {
+                    servers.insert("deckdriod".to_string(), deckdriod_config.clone());
+                }
+
+                if let Ok(new_content) = serde_json::to_string_pretty(&data) {
+                    if std::fs::write(&path, new_content).is_ok() {
+                        println!("✅ Installed MCP to {}", path.display());
+                        installed_count += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    if installed_count == 0 {
+        println!("⚠️ Could not find any supported IDE configurations to install MCP.");
+    }
+
+    Ok(())
+}

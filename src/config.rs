@@ -13,6 +13,8 @@ pub struct Config {
     pub output_path: String,
     pub mcp_port: u16,
     pub build_variant: String,
+    pub last_device: Option<String>,
+    pub last_tab: Option<String>,
     pub custom_commands: HashMap<char, String>,
 }
 
@@ -79,6 +81,8 @@ impl Config {
             output_path,
             mcp_port,
             build_variant: map.get("BUILD_VARIANT").cloned().unwrap_or_else(|| "debug".to_string()),
+            last_device: map.get("LAST_DEVICE").cloned(),
+            last_tab: map.get("LAST_TAB").cloned(),
             custom_commands,
         }
     }
@@ -88,6 +92,18 @@ impl Config {
             "APP_ID={}\nACTIVITY={}\nWATCH_LATENCY={:.1}\nREBUILD_GAP={:.1}\nLOG_TAG={}\nPROJECT_PATH={}\nOUTPUT_PATH={}\nMCP_PORT={}\nBUILD_VARIANT={}\n",
             self.app_id, self.activity, self.watch_latency, self.rebuild_gap, self.log_tag, self.project_path, self.output_path, self.mcp_port, self.build_variant
         );
+        if let Some(ref device) = self.last_device {
+            content.push_str(&format!("LAST_DEVICE={}\n", device));
+        }
+        if let Some(ref tab) = self.last_tab {
+            content.push_str(&format!("LAST_TAB={}\n", tab));
+        }
+        if let Some(ref device) = self.last_device {
+            content.push_str(&format!("LAST_DEVICE={}\n", device));
+        }
+        if let Some(ref tab) = self.last_tab {
+            content.push_str(&format!("LAST_TAB={}\n", tab));
+        }
 
         for (key, val) in &self.custom_commands {
             content.push_str(&format!("DECKDRIOD_CMD_{}={}\n", key.to_uppercase(), val));
