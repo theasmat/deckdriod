@@ -33,6 +33,7 @@ pub enum AppMode {
     ExportFormat,
     ProjectPicker,
     VariantPicker,
+    FilterBuilder,
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -141,6 +142,11 @@ pub struct AppState {
     
     // Rendering optimization
     pub needs_redraw: bool,
+    
+    // Filter builder
+    pub filter_package: String,
+    pub filter_tag: String,
+    pub filter_pid: String,
 }
 
 impl Default for AppState {
@@ -190,6 +196,9 @@ impl Default for AppState {
             variant_list: Vec::new(),
             variant_picker_idx: 0,
             needs_redraw: true,
+            filter_package: String::new(),
+            filter_tag: String::new(),
+            filter_pid: String::new(),
         }
     }
 }

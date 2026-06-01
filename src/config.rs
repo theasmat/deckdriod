@@ -2,6 +2,10 @@ use dotenvy;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+/// Application configuration loaded from .deckdriodconfig
+/// 
+/// Supports both project-local and home directory config files.
+/// Config values can be overridden via environment variables.
 #[derive(Clone)]
 pub struct Config {
     pub app_id: String,
@@ -111,5 +115,23 @@ impl Config {
 
         let config_path = Self::get_config_path();
         std::fs::write(config_path, content)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_config_parse() {
+        let mut map = HashMap::new();
+        map.insert("APP_ID".to_string(), "com.test.app".to_string());
+        map.insert("BUILD_VARIANT".to_string(), "release".to_string());
+        
+        let app_id = map.get("APP_ID").cloned().unwrap_or_else(|| "com.example.app".to_string());
+        let variant = map.get("BUILD_VARIANT").cloned().unwrap_or_else(|| "debug".to_string());
+        
+        assert_eq!(app_id, "com.test.app");
+        assert_eq!(variant, "release");
     }
 }

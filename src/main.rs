@@ -581,6 +581,10 @@ async fn main() -> Result<()> {
                                         app.state.mode = AppMode::VariantPicker;
                                         app.state.variant_picker_idx = 0;
                                     }
+                                    (KeyCode::Char('F'), _) => {
+                                        app.state.mode = AppMode::FilterBuilder;
+                                        app.state.settings_index = 0;
+                                    }
                                     (KeyCode::Char('E'), _) => {
                                         if let Ok(avds) = commands::get_avds().await {
                                             if !avds.is_empty() { app.state.available_avds = avds; app.state.mode = AppMode::EmulatorSelect; app.state.settings_index = 0; } 
@@ -901,6 +905,34 @@ async fn main() -> Result<()> {
                                         app.config.build_variant = variant.clone();
                                         let _ = app.config.save();
                                         let _ = tx_log.send(format!("[ok] build variant set to: {}", variant));
+                                        app.state.mode = AppMode::Normal;
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            AppMode::FilterBuilder => {
+                                match key.code {
+                                    KeyCode::Esc | KeyCode::Char('q') => { app.state.mode = AppMode::Normal; }
+                                    KeyCode::Up | KeyCode::Char('k') => app.state.settings_index = app.state.settings_index.saturating_sub(1),
+                                    KeyCode::Down | KeyCode::Char('j') => app.state.settings_index = (app.state.settings_index + 1).min(2),
+                                    KeyCode::Char(c) => {
+                                        match app.state.settings_index {
+                                            0 => app.state.filter_package.push(c),
+                                            1 => app.state.filter_tag.push(c),
+                                            2 => app.state.filter_pid.push(c),
+                                            _ => {}
+                                        }
+                                    }
+                                    KeyCode::Backspace => {
+                                        match app.state.settings_index {
+                                            0 => { app.state.filter_package.pop(); }
+                                            1 => { app.state.filter_tag.pop(); }
+                                            2 => { app.state.filter_pid.pop(); }
+                                            _ => {}
+                                        }
+                                    }
+                                    KeyCode::Enter => {
+                                        app.refresh_filter_cache();
                                         app.state.mode = AppMode::Normal;
                                     }
                                     _ => {}
@@ -1470,6 +1502,22 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
             ListItem::new(Line::from(vec![Span::styled(format!("{}{}", marker, variant), style)]))
         }).collect();
         f.render_widget(List::new(items).block(Block::default().borders(Borders::ALL).title(" Build Variant ").border_style(Style::default().fg(Color::Yellow))), area);
+    }
+
+    if app.state.mode == AppMode::FilterBuilder {
+        let area = centered_rect(60, 40, f.area());
+        f.render_widget(Clear, area);
+        let fields = vec![
+            format!("Package: {}_", app.state.filter_package),
+            format!("Tag: {}_", app.state.filter_tag),
+            format!("PID: {}_", app.state.filter_pid),
+        ];
+        let items: Vec<ListItem> = fields.iter().enumerate().map(|(i, text)| {
+            let mut style = Style::default();
+            if i == app.state.settings_index { style = style.fg(Color::Yellow).bold(); }
+            ListItem::new(Line::from(vec![Span::styled(format!("> {}", text), style)]))
+        }).collect();
+        f.render_widget(List::new(items).block(Block::default().borders(Borders::ALL).title(" Filter Builder (Enter to apply) ").border_style(Style::default().fg(Color::Yellow))), area);
     }
 
     if app.state.mode == AppMode::NoHardwareHelp {
