@@ -20,7 +20,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect, Alignment},
     style::{Color, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap, Sparkline, Clear, Tabs},
+    widgets::{Block, Borders, BorderType, List, ListItem, Paragraph, Wrap, Sparkline, Clear, Tabs},
     Terminal,
 };
 use std::io::stdout;
@@ -1140,7 +1140,7 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
         let title = match app.state.mode { AppMode::Search => " / Search ", AppMode::DeepLink => " Deep Link URL ", _ => " Input " };
         f.render_widget(
             Paragraph::new(format!("{}_", app.state.input_buffer))
-                .block(Block::default().borders(Borders::ALL).title(title).border_style(Style::default().fg(Color::Yellow))),
+                .block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title(title).border_style(Style::default().fg(Color::Yellow))),
             chunks[current_idx],
         );
         current_idx += 1;
@@ -1174,7 +1174,7 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
             let cpu_data: Vec<u64> = app.state.stats.cpu_usage.iter().map(|&v| (v * 10.0) as u64).collect();
             f.render_widget(
                 Sparkline::default()
-                    .block(Block::default().borders(Borders::ALL).title(cpu_title).border_style(Style::default().fg(Color::Green)))
+                    .block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title(cpu_title).border_style(Style::default().fg(Color::Green)))
                     .data(&cpu_data)
                     .style(Style::default().fg(Color::Green)),
                 stats_layout[0],
@@ -1182,14 +1182,14 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
             let mem_data: Vec<u64> = app.state.stats.mem_usage.iter().map(|&v| (v * 10.0) as u64).collect();
             f.render_widget(
                 Sparkline::default()
-                    .block(Block::default().borders(Borders::ALL).title(format!(" MEM {:.1}% ", app.state.stats.last_mem)).border_style(Style::default().fg(Color::Blue)))
+                    .block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title(format!(" MEM {:.1}% ", app.state.stats.last_mem)).border_style(Style::default().fg(Color::Blue)))
                     .data(&mem_data)
                     .style(Style::default().fg(Color::Blue)),
                 stats_layout[1],
             );
 
             // ── Build history + live status ────────────────────────────
-            let history_block = Block::default().borders(Borders::ALL).title(" Build Status ").border_style(Style::default().fg(Color::DarkGray));
+            let history_block = Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title(" Build Status ").border_style(Style::default().fg(Color::DarkGray));
             let inner_hist = history_block.inner(dash_chunks[1]);
             f.render_widget(history_block, dash_chunks[1]);
 
@@ -1223,7 +1223,7 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
             f.render_widget(Paragraph::new(hist_lines), inner_hist);
 
             // ── Commands grid (or live build log when building) ────────
-            let cmd_block = Block::default().borders(Borders::ALL)
+            let cmd_block = Block::default().borders(Borders::ALL).border_type(BorderType::Rounded)
                 .title(if app.state.build_task.is_some() { " Build Output (press [3] for full log) " } else { " Quick Commands " })
                 .border_style(Style::default().fg(if app.state.build_task.is_some() { Color::Yellow } else { Color::DarkGray }));
             let inner_cmd = cmd_block.inner(dash_chunks[2]);
@@ -1284,7 +1284,7 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
             // Show crash history if enabled in Errors tab
             if app.state.current_tab == Tab::Errors && app.state.show_crash_history {
                 let block = Block::default()
-                    .borders(Borders::ALL)
+                    .borders(Borders::ALL).border_type(BorderType::Rounded)
                     .title(" Crash History (press H to close) ")
                     .border_style(Style::default().fg(Color::Red));
                 let inner = block.inner(main_area);
@@ -1337,18 +1337,25 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
             } else {
                 format!(" PAUSED {}/{} | {}{} | {} lines ", scroll + 1, total, search_indicator, level_label, total)
             };
+            let mut border_style = Style::default().fg(Color::DarkGray);
+            if app.state.current_tab == Tab::Errors && app.state.last_crash.is_some() {
+                border_style = Style::default().fg(Color::Red).bold();
+            }
+
             let block = Block::default()
-                .borders(Borders::ALL)
+                .borders(Borders::ALL).border_type(BorderType::Rounded)
                 .title(format!(" {} ", tab_label))
                 .title_bottom(scroll_info.as_str())
-                .border_style(Style::default().fg(Color::DarkGray));
+                .border_style(border_style);
             let inner = block.inner(main_area);
             f.render_widget(block, main_area);
             app.state.log_area_rect = inner;
 
-            // Build ALL styled lines (no manual truncation - let Paragraph+Wrap handle it)
+            let app_id = &app.config.app_id;
             let all_lines: Vec<Line> = logs.iter().enumerate().map(|(idx, l)| {
-                let mut style = if l.contains("[err]") || l.contains("[build-err]") || l.contains(" E/") || l.contains(" FATAL") {
+                let mut style = if l.contains("FATAL EXCEPTION") || l.contains("AndroidRuntime:E") || l.contains("Caused by:") {
+                    Style::default().fg(Color::Red).bold()
+                } else if l.contains("[err]") || l.contains("[build-err]") || l.contains(" E/") || l.contains(" FATAL") {
                     Style::default().fg(Color::Red)
                 } else if l.contains("[ok]") {
                     Style::default().fg(Color::Green)
@@ -1361,10 +1368,20 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
                 } else {
                     Style::default().fg(Color::White)
                 };
+
+                // Smart Stack Trace Parsing
+                if l.starts_with("at ") || l.starts_with("\tat ") {
+                    if l.contains(app_id) {
+                        style = Style::default().fg(Color::White).bold(); // App code highlighted
+                    } else {
+                        style = Style::default().fg(Color::DarkGray); // Framework code dimmed
+                    }
+                }
+
                 if let (Some(s), Some(e)) = (app.state.selection_start, app.state.selection_end) {
                     if idx >= s.min(e) && idx <= s.max(e) { style = style.bg(Color::Blue).fg(Color::White); }
                 }
-                if l.starts_with("at ") || l.starts_with("\tat ") { style = Style::default().fg(Color::DarkGray); }
+                
                 Line::from(Span::styled(l.clone(), style))
             }).collect();
 
@@ -1385,11 +1402,19 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
         Span::styled(format!(" [BUILD: {}] ", short), Style::default().fg(Color::Yellow).bold())
     } else { Span::raw("") };
     let footer_line = Line::from(vec![
-        Span::styled(" [1-4]", Style::default().fg(Color::DarkGray)),
-        Span::styled(" [/]Search", Style::default().fg(Color::DarkGray)),
-        Span::styled(" [G]Follow", Style::default().fg(Color::DarkGray)),
-        Span::styled(" [h]Help", Style::default().fg(Color::DarkGray)),
-        Span::styled(" [q]Quit", Style::default().fg(Color::DarkGray)),
+        Span::styled(" › Press ", Style::default().fg(Color::DarkGray)),
+        Span::styled("r", Style::default().fg(Color::Cyan).bold()),
+        Span::styled(" reload | ", Style::default().fg(Color::DarkGray)),
+        Span::styled("d", Style::default().fg(Color::Cyan).bold()),
+        Span::styled(" device | ", Style::default().fg(Color::DarkGray)),
+        Span::styled("c", Style::default().fg(Color::Cyan).bold()),
+        Span::styled(" clear | ", Style::default().fg(Color::DarkGray)),
+        Span::styled("t", Style::default().fg(Color::Cyan).bold()),
+        Span::styled(" variant | ", Style::default().fg(Color::DarkGray)),
+        Span::styled("h", Style::default().fg(Color::Cyan).bold()),
+        Span::styled(" help | ", Style::default().fg(Color::DarkGray)),
+        Span::styled("q", Style::default().fg(Color::Cyan).bold()),
+        Span::styled(" quit ", Style::default().fg(Color::DarkGray)),
         Span::raw("  "),
         build_span,
         crash_span,
@@ -1422,7 +1447,7 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
             Line::from(vec![Span::styled(" e           ", Style::default().fg(Color::Cyan)), Span::raw(": Export logs to deckdriod_export.txt")]),
             Line::from(vec![Span::styled(" q / Esc     ", Style::default().fg(Color::Cyan)), Span::raw(": Close/Quit")]),
         ];
-        f.render_widget(Paragraph::new(help).block(Block::default().borders(Borders::ALL).title(title).border_style(Style::default().fg(Color::Cyan))).wrap(Wrap { trim: true }), area);
+        f.render_widget(Paragraph::new(help).block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title(title).border_style(Style::default().fg(Color::Cyan))).wrap(Wrap { trim: true }), area);
     }
 
     if app.state.mode == AppMode::Settings || (app.state.mode == AppMode::Input && app.state.settings_index < 10) {
@@ -1444,15 +1469,15 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
                 browse_hint,
             ]))
         }).collect();
-        f.render_widget(List::new(items).block(Block::default().borders(Borders::ALL).title(" Project Settings ").border_style(Style::default().fg(Color::Yellow))), area);
-        if app.state.mode == AppMode::Input { let input_area = centered_rect(50, 10, area); f.render_widget(Clear, input_area); f.render_widget(Paragraph::new(app.state.input_buffer.as_str()).block(Block::default().borders(Borders::ALL).title(" Edit ").border_style(Style::default().fg(Color::Yellow))), input_area); }
+        f.render_widget(List::new(items).block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title(" Project Settings ").border_style(Style::default().fg(Color::Yellow))), area);
+        if app.state.mode == AppMode::Input { let input_area = centered_rect(50, 10, area); f.render_widget(Clear, input_area); f.render_widget(Paragraph::new(app.state.input_buffer.as_str()).block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title(" Edit ").border_style(Style::default().fg(Color::Yellow))), input_area); }
     }
 
     if app.state.mode == AppMode::EmulatorSelect {
         let area = centered_rect(60, 40, f.area());
         f.render_widget(Clear, area);
         let items: Vec<ListItem> = app.state.available_avds.iter().enumerate().map(|(i, name)| { let mut style = Style::default(); if i == app.state.settings_index { style = style.fg(Color::Yellow).bold(); } ListItem::new(Line::from(vec![Span::styled(format!("> {}", name), style)])) }).collect();
-        f.render_widget(List::new(items).block(Block::default().borders(Borders::ALL).title(" Select Emulator ").border_style(Style::default().fg(Color::Yellow))), area);
+        f.render_widget(List::new(items).block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title(" Select Emulator ").border_style(Style::default().fg(Color::Yellow))), area);
     }
 
     if app.state.mode == AppMode::DevicePicker {
@@ -1465,7 +1490,7 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
         }).collect();
         items.push(ListItem::new(Line::from(vec![Span::styled("", Style::default())])));
         items.push(ListItem::new(Line::from(vec![Span::styled("[b] Broadcast to ALL devices", if app.state.is_broadcast { Style::default().fg(Color::Green).bold() } else { Style::default().fg(Color::DarkGray) })])));
-        f.render_widget(List::new(items).block(Block::default().borders(Borders::ALL).title(" Select Device ").border_style(Style::default().fg(Color::Yellow))), area);
+        f.render_widget(List::new(items).block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title(" Select Device ").border_style(Style::default().fg(Color::Yellow))), area);
     }
 
     if app.state.mode == AppMode::ExportFormat {
@@ -1477,7 +1502,7 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
             if i == app.state.settings_index { style = style.fg(Color::Yellow).bold(); }
             ListItem::new(Line::from(vec![Span::styled(format!("> {}", name), style)]))
         }).collect();
-        f.render_widget(List::new(items).block(Block::default().borders(Borders::ALL).title(" Export Format ").border_style(Style::default().fg(Color::Yellow))), area);
+        f.render_widget(List::new(items).block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title(" Export Format ").border_style(Style::default().fg(Color::Yellow))), area);
     }
 
     if app.state.mode == AppMode::ProjectPicker {
@@ -1489,7 +1514,7 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
             let name = std::path::Path::new(path).file_name().and_then(|n| n.to_str()).unwrap_or(path);
             ListItem::new(Line::from(vec![Span::styled(format!("> {}", name), style)]))
         }).collect();
-        f.render_widget(List::new(items).block(Block::default().borders(Borders::ALL).title(" Switch Project ").border_style(Style::default().fg(Color::Yellow))), area);
+        f.render_widget(List::new(items).block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title(" Switch Project ").border_style(Style::default().fg(Color::Yellow))), area);
     }
 
     if app.state.mode == AppMode::VariantPicker {
@@ -1501,7 +1526,7 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
             let marker = if variant == &app.config.build_variant { "✓ " } else { "  " };
             ListItem::new(Line::from(vec![Span::styled(format!("{}{}", marker, variant), style)]))
         }).collect();
-        f.render_widget(List::new(items).block(Block::default().borders(Borders::ALL).title(" Build Variant ").border_style(Style::default().fg(Color::Yellow))), area);
+        f.render_widget(List::new(items).block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title(" Build Variant ").border_style(Style::default().fg(Color::Yellow))), area);
     }
 
     if app.state.mode == AppMode::FilterBuilder {
@@ -1517,14 +1542,14 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
             if i == app.state.settings_index { style = style.fg(Color::Yellow).bold(); }
             ListItem::new(Line::from(vec![Span::styled(format!("> {}", text), style)]))
         }).collect();
-        f.render_widget(List::new(items).block(Block::default().borders(Borders::ALL).title(" Filter Builder (Enter to apply) ").border_style(Style::default().fg(Color::Yellow))), area);
+        f.render_widget(List::new(items).block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title(" Filter Builder (Enter to apply) ").border_style(Style::default().fg(Color::Yellow))), area);
     }
 
     if app.state.mode == AppMode::NoHardwareHelp {
         let area = centered_rect(70, 60, f.area());
         f.render_widget(Clear, area);
         let help = vec![Line::from(vec![Span::styled(" No Android Devices Detected ", Style::default().fg(Color::Red).bold())]), Line::from(vec![Span::raw("")]), Line::from(vec![Span::styled("1. Connect device via USB", Style::default().bold())]), Line::from(vec![Span::styled("2. Create emulator (AVD)", Style::default().bold())]), Line::from(vec![Span::raw("")]), Line::from(vec![Span::raw("sdkmanager \"system-images;android-33;google_apis;arm64-v8a\"")]), Line::from(vec![Span::raw("avdmanager create avd -n MyDevice -k \"system-images;android-33;google_apis;arm64-v8a\"")]), Line::from(vec![Span::styled("Press Esc to enter dashboard anyway.", Style::default().dark_gray())])];
-        f.render_widget(Paragraph::new(help).block(Block::default().borders(Borders::ALL).title(" Hardware Help ").border_style(Style::default().fg(Color::Red))).wrap(Wrap { trim: true }), area);
+        f.render_widget(Paragraph::new(help).block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title(" Hardware Help ").border_style(Style::default().fg(Color::Red))).wrap(Wrap { trim: true }), area);
     }
 
     if app.state.mode == AppMode::PickProject {
@@ -1540,12 +1565,12 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
             Line::from(Span::styled(" Press Enter to confirm, Esc to dismiss", Style::default().fg(Color::DarkGray))),
         ];
         f.render_widget(
-            Paragraph::new(msg).block(Block::default().borders(Borders::ALL).title(" Pick Project Path ").border_style(Style::default().fg(Color::Yellow))),
+            Paragraph::new(msg).block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title(" Pick Project Path ").border_style(Style::default().fg(Color::Yellow))),
             chunks[0],
         );
         f.render_widget(
             Paragraph::new(format!("{}_", app.state.input_buffer))
-                .block(Block::default().borders(Borders::ALL).title(" Path (Enter=confirm  b=browse) ").border_style(Style::default().fg(Color::Cyan))),
+                .block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title(" Path (Enter=confirm  b=browse) ").border_style(Style::default().fg(Color::Cyan))),
             chunks[1],
         );
     }
@@ -1562,7 +1587,7 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
             Paragraph::new(Line::from(vec![
                 Span::styled(" Browse: ", Style::default().fg(Color::DarkGray)),
                 Span::styled(app.state.dir_picker_cwd.clone(), Style::default().fg(Color::Cyan).bold()),
-            ])).block(Block::default().borders(Borders::TOP | Borders::LEFT | Borders::RIGHT).border_style(Style::default().fg(Color::Cyan))),
+            ])).block(Block::default().borders(Borders::TOP | Borders::LEFT | Borders::RIGHT).border_type(BorderType::Rounded).border_style(Style::default().fg(Color::Cyan))),
             chunks[0],
         );
 
@@ -1592,7 +1617,7 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
                 ]))
             }).collect();
         f.render_widget(
-            List::new(items).block(Block::default().borders(Borders::LEFT | Borders::RIGHT).border_style(Style::default().fg(Color::Cyan))),
+            List::new(items).block(Block::default().borders(Borders::LEFT | Borders::RIGHT).border_type(BorderType::Rounded).border_style(Style::default().fg(Color::Cyan))),
             chunks[1],
         );
 
@@ -1605,7 +1630,7 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
                     Style::default().fg(Color::Green)
                 ),
                 Span::styled(format!("  {}/{}", idx + 1, total), Style::default().fg(Color::DarkGray)),
-            ])).block(Block::default().borders(Borders::BOTTOM | Borders::LEFT | Borders::RIGHT).border_style(Style::default().fg(Color::Cyan))),
+            ])).block(Block::default().borders(Borders::BOTTOM | Borders::LEFT | Borders::RIGHT).border_type(BorderType::Rounded).border_style(Style::default().fg(Color::Cyan))),
             chunks[2],
         );
     }
